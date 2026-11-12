@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/ys319/bulkhead/internal/config"
 	"github.com/ys319/bulkhead/internal/ops"
@@ -146,4 +149,34 @@ func ensureMachineKey(store config.Store) (string, error) {
 		return "", fmt.Errorf("preparing the machine's ssh key: %w", err)
 	}
 	return publicKey, nil
+}
+
+// newHTTPClient is how bh reaches the services tokens come from. It goes
+// through the proxy the environment variables name (HTTPS_PROXY, NO_PROXY),
+// like every other tool on the machine, and gives up instead of hanging.
+func newHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyFromEnvironment
+	return &http.Client{Transport: transport, Timeout: 30 * time.Second}
+}
+
+// openInBrowser hands an address to the desktop's default browser and does
+// not wait for it. Where there is no browser (a machine reached over ssh)
+// this fails; the callers have printed the address by then.
+func openInBrowser(address string) error {
+	var command *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		command = exec.Command("open", address)
+	case "windows":
+		// Not cmd's start: the & in an address would end the command there.
+		command = exec.Command("rundll32", "url.dll,FileProtocolHandler", address)
+	default:
+		command = exec.Command("xdg-open", address)
+	}
+	if err := command.Start(); err != nil {
+		return err
+	}
+	go func() { _ = command.Wait() }()
+	return nil
 }
