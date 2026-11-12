@@ -119,6 +119,7 @@ const usageText = `usage: bh <command> [arguments]
   version             the build, and the Docker Engine bh talks to
   doctor [<env>]      check this machine's setup and, on the containers as
                       they are, the boundary of every environment (or of one)
+  completion zsh|bash print a completion script (eval it in the shell's rc)
 `
 
 func (a *app) run(ctx context.Context, args []string) int {
@@ -148,6 +149,9 @@ func (a *app) run(ctx context.Context, args []string) int {
 		"migrate":    a.migrate,
 		"version":    a.version,
 		"doctor":     a.doctor,
+		"completion": a.completion,
+		// For the completion scripts; not in the usage text.
+		"__complete": a.completeNames,
 	}
 	name := args[0]
 	switch name {
