@@ -53,6 +53,10 @@ type Fake struct {
 	VolumeRuns []VolumeRun
 	// VolumeJobErr makes running a script on a volume fail.
 	VolumeJobErr error
+	// EngineInfo is what Info reports (zero: a stock answer); InfoErr makes
+	// the engine one that does not answer.
+	EngineInfo engine.Info
+	InfoErr    error
 
 	nextID      int
 	holderPolls int
@@ -309,4 +313,31 @@ func (f *Fake) WriteVolume(_ context.Context, job engine.VolumeJob, input []byte
 // RunInVolume records the script.
 func (f *Fake) RunInVolume(_ context.Context, job engine.VolumeJob) error {
 	return f.volumeJob("run-in-volume", job, nil)
+}
+
+// Describe answers from what the container was created from (Created) and
+// its current state. A container that was put in place without a spec
+// (AddLegacy) has only its state.
+func (f *Fake) Describe(ctx context.Context, name string) (*engine.Description, error) {
+	found, err := f.Container(ctx, name)
+	if found == nil || err != nil {
+		return nil, err
+	}
+	described := engine.Description{Name: name}
+	if spec, ok := f.Created[name]; ok {
+		described = engine.DescribeSpec(name, spec.Config, spec.Host)
+	}
+	described.Container = *found
+	return &described, nil
+}
+
+// Info reports EngineInfo, or InfoErr when that is set.
+func (f *Fake) Info(context.Context) (engine.Info, error) {
+	if f.InfoErr != nil {
+		return engine.Info{}, f.InfoErr
+	}
+	if f.EngineInfo == (engine.Info{}) {
+		return engine.Info{Version: "29.0.0", APIVersion: "1.52", OS: "linux", Arch: "amd64", Builder: "2"}, nil
+	}
+	return f.EngineInfo, nil
 }

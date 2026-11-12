@@ -82,23 +82,8 @@ func (c *Client) Container(ctx context.Context, name string) (*Container, error)
 	if err != nil {
 		return nil, err
 	}
-	info := res.Container
-	found := &Container{ID: info.ID}
-	if info.State != nil {
-		found.Status = string(info.State.Status)
-		// An unparsable time stays zero, which callers treat as "unknown".
-		found.StartedAt, _ = time.Parse(time.RFC3339Nano, info.State.StartedAt)
-		if info.State.Health != nil {
-			found.Health = string(info.State.Health.Status)
-		}
-	}
-	if info.HostConfig != nil {
-		found.NetworkMode = string(info.HostConfig.NetworkMode)
-	}
-	if info.Config != nil {
-		found.Labels = info.Config.Labels
-	}
-	return found, nil
+	found := summarize(res.Container)
+	return &found, nil
 }
 
 // CreateContainer creates (does not start) a container and returns its id.

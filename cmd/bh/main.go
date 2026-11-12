@@ -52,6 +52,8 @@ type dockerEngine interface {
 	VolumeSizes(ctx context.Context) (map[string]int64, error)
 	WriteVolume(ctx context.Context, job engine.VolumeJob, input []byte) error
 	RunInVolume(ctx context.Context, job engine.VolumeJob) error
+	Describe(ctx context.Context, name string) (*engine.Description, error)
+	Info(ctx context.Context) (engine.Info, error)
 }
 
 // app is one invocation of bh with its surroundings, so that tests can
@@ -148,9 +150,12 @@ const usageText = `usage: bh [command] [arguments]
                       one at a time; without a name, list them
                       (--undo <name> hands one back; volumes are never removed)
   version             the build, and the Docker Engine bh talks to
+  doctor [<env>]      check this machine's setup and, on the containers as
+                      they are, the boundary of every environment (or of one)
+  completion zsh|bash print a completion script (eval it in the shell's rc)
 
-  At a terminal, up, down, restart, logs, status, ssh and open ask which
-  environment when none is named.
+  Without <env>, up / down / restart / logs / status / ssh / open ask which
+  (at a terminal).
 `
 
 func (a *app) run(ctx context.Context, args []string) int {
@@ -175,11 +180,16 @@ func (a *app) run(ctx context.Context, args []string) int {
 		"root-shell": a.rootShell,
 		"gpu":        a.gpu,
 		"path":       a.path,
+		"reset":      a.reset,
 		"destroy":    a.destroy,
 		"migrate":    a.migrate,
 		"version":    a.version,
 		"github":     a.github,
 		"token":      a.token,
+		"doctor":     a.doctor,
+		"completion": a.completion,
+		// For the completion scripts; not in the usage text.
+		"__complete": a.completeNames,
 	}
 	name := args[0]
 	switch name {
