@@ -46,8 +46,12 @@ func (a *app) load() (config.Store, *config.Config, error) {
 	return store, cfg, err
 }
 
-// sshConfigPath is the user's ssh client configuration.
+// sshConfigPath is the user's ssh client configuration. BH_SSH_CONFIG names
+// another file, for trying bh out without touching the real one.
 func (a *app) sshConfigPath() (string, error) {
+	if explicit := a.getenv("BH_SSH_CONFIG"); explicit != "" {
+		return explicit, nil
+	}
 	return sshconfig.DefaultPath(a.goos, a.getenv)
 }
 
