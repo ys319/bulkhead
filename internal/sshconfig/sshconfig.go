@@ -96,22 +96,8 @@ func EnsureInclude(configPath string) error {
 	if len(existing) > 0 {
 		lines = strings.Split(string(existing), "\n")
 	}
-	// Markers are looked for without a trailing CR: a file saved with CRLF
-	// would otherwise get a second block every time.
-	begin, end, begins, ends := -1, -1, 0, 0
-	for i, line := range lines {
-		switch strings.TrimSuffix(line, "\r") {
-		case beginMark:
-			if begins++; begin == -1 {
-				begin = i
-			}
-		case endMark:
-			if ends++; end == -1 {
-				end = i
-			}
-		}
-	}
-	if (begin == -1) != (end == -1) || begin > end || begins > 1 || ends > 1 {
+	begin, end, broken := findBlock(lines)
+	if broken {
 		return fmt.Errorf("the bh markers in %s are broken; repair or remove the %q block by hand", configPath, beginMark)
 	}
 
@@ -130,6 +116,44 @@ func EnsureInclude(configPath string) error {
 		return err
 	}
 	return writeFile(configPath, text)
+}
+
+// findBlock locates the marked block: the lines of its markers, or -1, -1
+// when there is none. broken means a marker is missing, repeated or out of
+// order.
+func findBlock(lines []string) (begin, end int, broken bool) {
+	// Markers are looked for without a trailing CR: a file saved with CRLF
+	// would otherwise get a second block every time.
+	begin, end = -1, -1
+	begins, ends := 0, 0
+	for i, line := range lines {
+		switch strings.TrimSuffix(line, "\r") {
+		case beginMark:
+			if begins++; begin == -1 {
+				begin = i
+			}
+		case endMark:
+			if ends++; end == -1 {
+				end = i
+			}
+		}
+	}
+	return begin, end, (begin == -1) != (end == -1) || begin > end || begins > 1 || ends > 1
+}
+
+// Broken reports whether the configuration has a damaged block, which
+// EnsureInclude refuses to touch: until somebody repairs it by hand, the
+// Include line is not kept up.
+func Broken(configPath string) (bool, error) {
+	data, err := os.ReadFile(configPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	_, _, broken := findBlock(strings.Split(string(data), "\n"))
+	return broken, nil
 }
 
 // Sync writes the fragment and makes sure it is included. It is called

@@ -117,6 +117,28 @@ func TestEnsureIncludeRefusesBrokenMarkers(t *testing.T) {
 		if read(t, config) != text {
 			t.Errorf("%s: the file was changed", name)
 		}
+		// What EnsureInclude refuses is what Broken reports.
+		if broken, err := Broken(config); err != nil || !broken {
+			t.Errorf("%s: Broken = %v, %v", name, broken, err)
+		}
+	}
+}
+
+func TestBrokenIsOnlyAboutTheMarkers(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config")
+	if broken, err := Broken(config); err != nil || broken {
+		t.Errorf("no file: Broken = %v, %v", broken, err)
+	}
+	for name, text := range map[string]string{
+		"no block":      "Host mine\n  User me\n",
+		"the block":     "# >>> bh >>>\nInclude bh/config\n# <<< bh <<<\n\nHost mine\n",
+		"a CRLF file":   "# >>> bh >>>\r\nInclude bh/config\r\n# <<< bh <<<\r\n",
+		"an empty file": "",
+	} {
+		os.WriteFile(config, []byte(text), 0o600)
+		if broken, err := Broken(config); err != nil || broken {
+			t.Errorf("%s: Broken = %v, %v", name, broken, err)
+		}
 	}
 }
 

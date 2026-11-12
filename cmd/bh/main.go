@@ -45,6 +45,8 @@ type dockerEngine interface {
 	DeviceGIDs(ctx context.Context, image string, devices []string) ([]int, error)
 	Logs(ctx context.Context, id string, opts engine.LogOptions, out io.Writer) error
 	Exec(ctx context.Context, id string, spec engine.ExecSpec, streams engine.Streams) (int, error)
+	Describe(ctx context.Context, name string) (*engine.Description, error)
+	Info(ctx context.Context) (engine.Info, error)
 }
 
 // app is one invocation of bh with its surroundings, so that tests can
@@ -115,6 +117,8 @@ const usageText = `usage: bh <command> [arguments]
                       one at a time; without a name, list them
                       (--undo <name> hands one back; volumes are never removed)
   version             the build, and the Docker Engine bh talks to
+  doctor [<env>]      check this machine's setup and, on the containers as
+                      they are, the boundary of every environment (or of one)
 `
 
 func (a *app) run(ctx context.Context, args []string) int {
@@ -143,6 +147,7 @@ func (a *app) run(ctx context.Context, args []string) int {
 		"destroy":    a.destroy,
 		"migrate":    a.migrate,
 		"version":    a.version,
+		"doctor":     a.doctor,
 	}
 	name := args[0]
 	switch name {

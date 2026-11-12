@@ -69,6 +69,11 @@ func (a *app) writeSSH(store config.Store) error {
 	if err != nil {
 		return err
 	}
+	return sshconfig.Sync(path, store.MachineKey(), sshHosts(cfg))
+}
+
+// sshHosts are the environments as the ssh client reaches them.
+func sshHosts(cfg *config.Config) []sshconfig.Host {
 	hosts := make([]sshconfig.Host, 0, len(cfg.Envs))
 	for _, env := range cfg.Envs {
 		host := "127.0.0.1"
@@ -77,7 +82,7 @@ func (a *app) writeSSH(store config.Store) error {
 		}
 		hosts = append(hosts, sshconfig.Host{Name: env.Name, HostName: host, Port: env.SSHPort})
 	}
-	return sshconfig.Sync(path, store.MachineKey(), hosts)
+	return hosts
 }
 
 // forgetHostKey drops the environment's entry from known_hosts. Only

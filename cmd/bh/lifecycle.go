@@ -235,14 +235,21 @@ func containersFor(store config.Store, env config.Environment) (plan.Env, plan.T
 		return plan.Env{}, plan.Target{}, fmt.Errorf("preparing init.sh: %w", err)
 	}
 
+	return planEnv(env, append([]string{machineKey}, registered...), initScript), plan.Target{Owner: owner}, nil
+}
+
+// planEnv is the settings as the plan takes them. It is one function so
+// that bh doctor compares the containers with exactly what bh up creates
+// them from.
+func planEnv(env config.Environment, keys []string, initScript string) plan.Env {
 	return plan.Env{
 		ID: env.ID, Name: env.Name, SSHPort: env.SSHPort, Publish: env.Publish, Restart: env.Restart,
-		AuthorizedKeys: append([]string{machineKey}, registered...),
+		AuthorizedKeys: keys,
 		DockerSocket:   env.DockerSocket,
 		InitScript:     initScript,
 		GPU:            env.GPU,
 		CDIDevices:     env.CDIDevices,
-	}, plan.Target{Owner: owner}, nil
+	}
 }
 
 // socketWarning is said whenever an environment with the opt-in is started
@@ -260,6 +267,24 @@ const (
 // devImageRepo is the image of an environment with its own dev.Dockerfile.
 func devImageRepo(id string) string { return "bulkhead-dev-" + id }
 
+// The sources of the images: the two embedded in bh, and an environment's
+// dev.Dockerfile on top of the base it was given. Their references are
+// what tells a container of this bh from one of another (bh doctor).
+func holderSource() image.Source {
+	return image.Source{Repo: holderRepo, FS: containers.FS, Dir: "holder"}
+}
+
+func devBaseSource() image.Source {
+	return image.Source{Repo: devBaseRepo, FS: containers.FS, Dir: "dev"}
+}
+
+func devSource(store config.Store, id, base string) image.Source {
+	return image.Source{
+		Repo: devImageRepo(id), FS: os.DirFS(store.EnvDir(id)), Dir: ".",
+		Dockerfile: "dev.Dockerfile", Skip: keptOutOfBuilds, Base: base,
+	}
+}
+
 // keptOutOfBuilds: files in an environment's directory that are bh's, not
 // part of the user's build context. The token files among them hold secrets.
 func keptOutOfBuilds(name string) bool {
@@ -274,13 +299,11 @@ func keptOutOfBuilds(name string) bool {
 // it already has them, or in any case with rebuild), the socket's group
 // with the opt-in, and the groups of the GPU devices.
 func (a *app) realize(ctx context.Context, eng dockerEngine, store config.Store, env *plan.Env, target *plan.Target, rebuild *image.Options) (err error) {
-	target.HolderImage, err = image.Ensure(ctx, eng, a.builder,
-		image.Source{Repo: holderRepo, FS: containers.FS, Dir: "holder"}, a.stderr)
+	target.HolderImage, err = image.Ensure(ctx, eng, a.builder, holderSource(), a.stderr)
 	if err != nil {
 		return err
 	}
-	target.DevImage, err = image.EnsureWith(ctx, eng, a.builder,
-		image.Source{Repo: devBaseRepo, FS: containers.FS, Dir: "dev"}, rebuild, a.stderr)
+	target.DevImage, err = image.EnsureWith(ctx, eng, a.builder, devBaseSource(), rebuild, a.stderr)
 	if err != nil {
 		return err
 	}
@@ -296,10 +319,7 @@ func (a *app) realize(ctx context.Context, eng dockerEngine, store config.Store,
 			// Not Pull: the base exists on this machine only.
 			again = &image.Options{NoCache: rebuild.NoCache}
 		}
-		target.DevImage, err = image.EnsureWith(ctx, eng, a.builder, image.Source{
-			Repo: devImageRepo(env.ID), FS: os.DirFS(store.EnvDir(env.ID)), Dir: ".",
-			Dockerfile: "dev.Dockerfile", Skip: keptOutOfBuilds, Base: target.DevImage,
-		}, again, a.stderr)
+		target.DevImage, err = image.EnsureWith(ctx, eng, a.builder, devSource(store, env.ID, target.DevImage), again, a.stderr)
 		if err != nil {
 			return fmt.Errorf("building %s: %w", store.DevDockerfile(env.ID), err)
 		}

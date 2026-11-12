@@ -47,6 +47,10 @@ type Fake struct {
 	MissingImage func(ref string) bool
 	// Tags are the names images were given.
 	Tags map[string]string
+	// EngineInfo is what Info reports (zero: a stock answer); InfoErr makes
+	// the engine one that does not answer.
+	EngineInfo engine.Info
+	InfoErr    error
 
 	nextID      int
 	holderPolls int
@@ -254,4 +258,31 @@ func (f *Fake) CDIDevices(context.Context) ([]string, bool, error) {
 func (f *Fake) DeviceGIDs(_ context.Context, _ string, devices []string) ([]int, error) {
 	f.log("probe-devices %s", strings.Join(devices, ","))
 	return f.DeviceGroups, nil
+}
+
+// Describe answers from what the container was created from (Created) and
+// its current state. A container that was put in place without a spec
+// (AddLegacy) has only its state.
+func (f *Fake) Describe(ctx context.Context, name string) (*engine.Description, error) {
+	found, err := f.Container(ctx, name)
+	if found == nil || err != nil {
+		return nil, err
+	}
+	described := engine.Description{Name: name}
+	if spec, ok := f.Created[name]; ok {
+		described = engine.DescribeSpec(name, spec.Config, spec.Host)
+	}
+	described.Container = *found
+	return &described, nil
+}
+
+// Info reports EngineInfo, or InfoErr when that is set.
+func (f *Fake) Info(context.Context) (engine.Info, error) {
+	if f.InfoErr != nil {
+		return engine.Info{}, f.InfoErr
+	}
+	if f.EngineInfo == (engine.Info{}) {
+		return engine.Info{Version: "29.0.0", APIVersion: "1.52", OS: "linux", Arch: "amd64", Builder: "2"}, nil
+	}
+	return f.EngineInfo, nil
 }
