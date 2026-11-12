@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/ys319/bulkhead/internal/config"
+	"github.com/ys319/bulkhead/internal/doctor"
 	"github.com/ys319/bulkhead/internal/engine"
 	"github.com/ys319/bulkhead/internal/ops"
 )
@@ -182,6 +183,48 @@ func (f *fake) Watch(ctx context.Context) <-chan bool {
 	go func() { <-ctx.Done(); close(changes) }()
 	return changes
 }
+func (f *fake) SetToken(_ context.Context, name, kind, tokenName, value string) (string, error) {
+	if err := f.call("set-token %s %s %s len=%d", name, kind, tokenName, len(value)); err != nil {
+		return "", err
+	}
+	state := f.find(name)
+	state.Tokens = append(state.Tokens, Token{Kind: kind, Name: tokenName})
+	return "saved " + tokenName, nil
+}
+func (f *fake) RemoveToken(_ context.Context, name, tokenName string) (string, error) {
+	if err := f.call("remove-token %s %s", name, tokenName); err != nil {
+		return "", err
+	}
+	state := f.find(name)
+	state.Tokens = slices.DeleteFunc(state.Tokens, func(token Token) bool { return token.Name == tokenName })
+	return "removed " + tokenName, nil
+}
+func (f *fake) TokenPage(kind string) string {
+	if kind == config.TokenKindHF {
+		return "https://hf.test/tokens"
+	}
+	return ""
+}
+func (f *fake) GitHubIssue(name, preset string) (string, string, error) {
+	return "https://github.test/new?preset=" + preset, "bulkhead-" + name, f.call("github-issue %s %s", name, preset)
+}
+func (f *fake) SetGitHub(_ context.Context, name, token, preset, tokenName string) (string, error) {
+	if err := f.call("set-github %s %s %s", name, preset, tokenName); err != nil {
+		return "", err
+	}
+	state := f.find(name)
+	state.Tokens = append([]Token{{Kind: "github", Name: "GH_TOKEN", Summary: preset + " · octocat · 2 repos · expires in 30d"}}, state.Tokens...)
+	return "GitHub token set", nil
+}
+func (f *fake) RevokeGitHub(_ context.Context, name string) (string, error) {
+	if err := f.call("revoke-github %s", name); err != nil {
+		return "", err
+	}
+	state := f.find(name)
+	state.Tokens = slices.DeleteFunc(state.Tokens, func(token Token) bool { return token.Kind == "github" })
+	return "revoked", nil
+}
+func (f *fake) OpenURL(address string) error { return f.call("open-url %s", address) }
 func (f *fake) DiskUsage(context.Context) (map[string]int64, error) {
 	return map[string]int64{
 		"bulkhead-id-web_workspace": 1_200_000_000, "bulkhead-id-web_home": 513_000_000,
@@ -769,5 +812,115 @@ func TestHumanBytes(t *testing.T) {
 	}
 	if _, has := DiskSummary("nope", map[string]int64{"bulkhead-id-web_home": 1}); has {
 		t.Error("an environment without volumes got a disk summary")
+	}
+}
+
+func TestTokensMenu(t *testing.T) {
+	s := start(t)
+	s.onto("web").press("enter").pick("Settings")
+	if got, want := s.labels(), []string{"Runtime", "SSH", "Tokens"}; !slices.Equal(got, want) {
+		t.Errorf("settings: %q", got)
+	}
+	s.pick("Tokens")
+	if got, want := s.labels(), []string{"GitHub", "+ Add Hugging Face token", "+ Add custom token"}; !slices.Equal(got, want) {
+		t.Errorf("tokens: %q", got)
+	}
+
+	// A custom token: its name is checked before the value is asked for,
+	// and the value never shows.
+	s.pick("+ Add custom token").press("PATH", "enter")
+	if _, still := s.top().(*input); !still {
+		t.Fatal("a reserved name was accepted")
+	}
+	s.top().(*input).value = []rune("OPENAI_API_KEY")
+	s.press("enter")
+	s.Update(tea.PasteMsg{Content: "sk-secret-value\n"})
+	if text := s.text(); strings.Contains(text, "sk-secret") || !strings.Contains(text, "•••") {
+		t.Errorf("the value is on the screen:\n%s", text)
+	}
+	s.press("enter")
+	s.called("set-token web custom OPENAI_API_KEY len=15")
+	s.shows("custom: OPENAI_API_KEY")
+
+	// Hugging Face: the page opens, and only one such token can be added.
+	s.press("enter").pick("Settings").pick("Tokens").pick("+ Add Hugging Face token")
+	s.called("open-url https://hf.test/tokens")
+	s.press("hf_abc", "enter")
+	s.called("set-token web hf HF_TOKEN len=6")
+	s.press("enter").pick("Settings").pick("Tokens")
+	if got, want := s.labels(), []string{"GitHub", "OPENAI_API_KEY", "HF_TOKEN", "+ Add custom token"}; !slices.Equal(got, want) {
+		t.Errorf("tokens afterwards: %q", got)
+	}
+
+	s.pick("OPENAI_API_KEY").pick("Remove")
+	s.shows("it stays valid at its service")
+	s.press("right", "enter")
+	s.called("remove-token web OPENAI_API_KEY")
+}
+
+func TestGitHubTokenFlow(t *testing.T) {
+	s := start(t)
+	s.onto("web").press("enter").pick("Settings").pick("Tokens").pick("GitHub")
+	if got, want := s.labels(), []string{"Issue a token"}; !slices.Equal(got, want) {
+		t.Errorf("without a token: %q", got)
+	}
+	// No preset is preselected for good: the user has to pick one.
+	s.pick("Issue a token")
+	if got, want := s.labels(), []string{"read", "push", "push+pr"}; !slices.Equal(got, want) {
+		t.Errorf("presets: %q", got)
+	}
+	s.pick("push")
+	s.called("github-issue web push")
+	s.called("open-url https://github.test/new?preset=push")
+	s.shows("token name: bulkhead-web")
+
+	s.press("not-a-token", "enter")
+	s.shows("does not look like a fine-grained token")
+	s.top().(*input).value = []rune("github_pat_ABC123")
+	// ctrl+o opens the page again.
+	s.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+	if count := strings.Count(strings.Join(s.backend.calls, "\n"), "open-url"); count != 2 {
+		t.Errorf("the page was opened %d times", count)
+	}
+	s.press("enter")
+	s.called("set-github web push bulkhead-web")
+	s.shows("github: push · octocat · 2 repos · expires in 30d")
+
+	s.press("enter").pick("Settings").pick("Tokens").pick("GitHub")
+	if got := s.labels(); !slices.Equal(got[1:], []string{"---", "Replace", "Revoke"}) {
+		t.Errorf("with a token: %q", got)
+	}
+	s.pick("Revoke").press("right", "enter")
+	s.called("revoke-github web")
+}
+
+func TestDoctorShowsInTheDetailAndInTheNameColor(t *testing.T) {
+	s := start(t)
+	web := s.backend.find("web")
+	web.Findings = []doctor.Finding{{Level: doctor.OK, Message: "dev has no capabilities"}, {Level: doctor.OK, Message: "holder is healthy"}}
+	s.settle(s.reload(false))
+	s.onto("web")
+	s.shows("doctor: ok (2 checks)")
+
+	// An opt-in is always shown, apart, and does not colour the name.
+	web.Findings = append(web.Findings, doctor.Finding{Level: doctor.Warn, Standing: true, Message: "ssh is published to the network"})
+	s.settle(s.reload(false))
+	s.shows("doctor: ok (2 checks) · 1 opt-in")
+	if got := envStyle(*s.env("id-web"), reachState{}); got.color != green {
+		t.Errorf("with an opt-in only, the name is %+v", got)
+	}
+
+	web.Findings = append(web.Findings, doctor.Finding{Level: doctor.Fail, Message: "dev is privileged"}, doctor.Finding{Level: doctor.Warn, Message: "created by an older bh"})
+	s.settle(s.reload(false))
+	s.shows("doctor: 1 FAIL / 1 warn · 1 opt-in", "dev is privileged", "created by an older bh")
+	if got := envStyle(*s.env("id-web"), reachState{}); got.color != red {
+		t.Errorf("with a failure, the name is %+v", got)
+	}
+
+	// Stopped, the findings do not paint the name.
+	web.Status = stopped()
+	s.settle(s.reload(false))
+	if got := envStyle(*s.env("id-web"), reachState{}); got.color != gray {
+		t.Errorf("stopped, the name is %+v", got)
 	}
 }

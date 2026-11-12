@@ -45,36 +45,47 @@ func (b backend) Load(ctx context.Context) (tui.Snapshot, error) {
 	if err != nil {
 		return tui.Snapshot{}, err
 	}
-	keys, err := store.LoadKeys()
-	if err != nil {
-		return tui.Snapshot{}, err
+	keys, keysErr := store.LoadKeys()
+	if keysErr != nil {
+		return tui.Snapshot{}, keysErr
 	}
 	snap := tui.Snapshot{Broken: cfg.Broken, Keys: keys}
 
 	// One connection for all environments, and none when there is no
 	// local one. When the engine cannot be asked the list still shows what
 	// is configured.
-	var runner *ops.Runner
+	var eng dockerEngine
 	for _, env := range cfg.Envs {
 		state := tui.EnvState{Env: env}
-		if env.Local() && snap.EngineProblem == "" {
-			if runner == nil {
-				eng, disconnect, err := b.a.dial(b.a.getenv)
+		if env.Local() {
+			if eng == nil && snap.EngineProblem == "" {
+				dialed, disconnect, err := b.a.dial(b.a.getenv)
 				if err != nil {
 					snap.EngineProblem = err.Error()
 				} else {
 					defer disconnect()
-					runner = &ops.Runner{Engine: eng}
+					eng = dialed
 				}
 			}
-			if runner != nil {
-				status, err := runner.Inspect(ctx, env.ID)
+			if eng != nil {
+				status, err := (ops.Runner{Engine: eng}).Inspect(ctx, env.ID)
 				if err != nil {
-					snap.EngineProblem, runner = err.Error(), nil
+					snap.EngineProblem, eng = err.Error(), nil
 				} else {
 					state.Status, state.Known = status, true
+					// The boundary as it is on the containers now: the same
+					// findings bh doctor prints for this environment.
+					state.Findings = checkEnvironment(ctx, eng, store, env, keys, nil)
 				}
 			}
+			_, entries, problems, err := b.a.listTokens(env.Name)
+			if err != nil {
+				problems = append(problems, err.Error())
+			}
+			for _, entry := range entries {
+				state.Tokens = append(state.Tokens, tui.Token{Kind: entry.Kind, Name: entry.Name, Summary: entry.Summary})
+			}
+			state.TokenProblem = strings.Join(problems, "; ")
 		}
 		snap.Envs = append(snap.Envs, state)
 	}
@@ -514,3 +525,64 @@ func (b backend) DiskUsage(ctx context.Context) (map[string]int64, error) {
 	defer disconnect()
 	return eng.VolumeSizes(ctx)
 }
+
+// said joins what an operation reports into the lines of one message.
+func said(first string, notes, warnings []string) string {
+	return strings.Join(append(append([]string{first}, notes...), warnings...), "\n")
+}
+
+func (b backend) SetToken(ctx context.Context, name, kind, tokenName, value string) (string, error) {
+	result, err := b.quiet(io.Discard).setToken(ctx, name, kind, tokenName, value)
+	if err != nil {
+		return "", err
+	}
+	notes, warnings := result.report()
+	return said("saved "+result.Entry.Name, notes, warnings), nil
+}
+
+func (b backend) RemoveToken(ctx context.Context, name, tokenName string) (string, error) {
+	result, err := b.quiet(io.Discard).removeToken(ctx, name, tokenName)
+	if err != nil {
+		return "", err
+	}
+	text := "removed " + result.Entry.Name + " — it is still valid at its service; revoke it there if it may have leaked"
+	if result.SyncErr != nil {
+		text += fmt.Sprintf("\nit is still in the environment (%s) — bh up %s takes it out", oneLine(result.SyncErr), result.Env.Name)
+	}
+	return text, nil
+}
+
+func (b backend) TokenPage(kind string) string {
+	if kind == config.TokenKindHF {
+		return hfTokenURL
+	}
+	return ""
+}
+
+func (b backend) GitHubIssue(name, preset string) (address, tokenName string, err error) {
+	issue, err := b.a.prepareGitHubIssue(name, githubRequest{Preset: preset})
+	return issue.URL, issue.TokenName, err
+}
+
+func (b backend) SetGitHub(ctx context.Context, name, token, preset, tokenName string) (string, error) {
+	result, err := b.quiet(io.Discard).setGitHubToken(ctx, name, token, githubRequest{Preset: preset}, tokenName)
+	if err != nil {
+		return "", err
+	}
+	notes, warnings := result.report()
+	return said("GitHub token set: "+githubSummary(result.State, b.a.now()), notes, warnings), nil
+}
+
+func (b backend) RevokeGitHub(ctx context.Context, name string) (string, error) {
+	result, err := b.quiet(io.Discard).revokeGitHubToken(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	text := "revoked the GitHub token (" + result.State.TokenName + ")"
+	if result.ClearErr != nil {
+		text += fmt.Sprintf("\nit is still in the environment (%s) — bh up %s takes it out; it no longer works", oneLine(result.ClearErr), result.Env.Name)
+	}
+	return text, nil
+}
+
+func (b backend) OpenURL(address string) error { return b.a.openURL(address) }

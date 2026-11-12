@@ -230,6 +230,7 @@ func (m *Model) localDetail(state EnvState, inner, rows int) []string {
 	if env.DockerSocket {
 		lines = append(lines, field(inner, "docker", paint(magenta, "host Docker socket mounted — not isolated"))...)
 	}
+	lines = append(lines, doctorLines(state.Findings, inner)...)
 	// The disk line is there in every state of the reading, so that nothing
 	// below it moves when the sizes arrive. It is absent only for an
 	// environment without volumes.
@@ -263,6 +264,7 @@ func (m *Model) localDetail(state EnvState, inner, rows int) []string {
 		keys += " + " + strconv.Itoa(extra)
 	}
 	lines = append(lines, field(inner, "  keys", keys)...)
+	lines = append(lines, tokenLines(state, inner)...)
 
 	// The end of the environment's output, as far as there is room.
 	if m.logs != nil && m.logs.id == env.ID {

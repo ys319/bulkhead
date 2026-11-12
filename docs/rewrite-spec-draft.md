@@ -329,13 +329,23 @@ Settings → Tokens が Variables と Secrets の2つになること、Remote �
 7. 古いコンテナとネットワークを消す。
 8. `environments/<id>/env.json` を書き、TS 版のディレクトリを退避する。
 
-止める条件（移さずに TS 版に残す）: `compose.override.yaml` がある / `dev.Dockerfile` が
-ある・GPU を使う（どちらもこの版が未対応）/ 参照している鍵が keys.json に無い /
-作り直し版に同じ名前・同じ id・同じ SSH ポートの環境がある / env.json が読めない。
+止める条件（移さずに TS 版に残す）: `compose.override.yaml` がある / 参照している鍵が
+keys.json に無い / 作り直し版に同じ名前・同じ id・同じ SSH ポートの環境がある /
+env.json が読めない。
 
-付いてこないもの（表示して確認を取る）: GitHub トークンとその他のトークン（シークレットが
-未実装）、`init.sh`（inject が未実装）、SSH 設定の `Host bulkhead-<name>`（この版はまだ
-書かない。TS 版が SSH 設定を書き直すと消える — `bh ssh` は効く）。
+一緒に移るもの（2026-11-12 夜に追加 — **実機では未確認**）:
+
+- 環境ディレクトリの中の利用者のファイル（`dev.Dockerfile` と、それが COPY するファイル）と
+  トークンの記録（`github.json` / `tokens.json`）を、作り直し版の環境ディレクトリへ**写す**
+  （元は退避先に残る）。TS 版が自分用に生成したもの（`compose.yaml` など）は写さない。
+- トークンの中身は `_github` / `_tokens` ボリュームにあり、ボリュームはそのまま使うので
+  何もしなくても付いてくる（マウント先も TS 版と同じ）。
+- `init.sh`: 作り直し版にまだ無ければ TS 版のものを写す。既にあって中身が違えば写さず、
+  その旨を表示する（以後に走るのは作り直し版のもの）。
+- GPU の設定（`gpu` / `cdiDevices`）は env.json ごと移る。
+- SSH 設定の `Host bulkhead-<name>` は作り直し版が自分の断片（`~/.ssh/bh/config`）に書く。
+  TS 版の断片に残る同名の項目は、TS 版が SSH 設定を書き直すまで残る（先に読まれるのは
+  作り直し版の Include）。
 
 保たれるもの: sshPort と hostkeys が同じなので **known_hosts の警告は出ない**。
 
@@ -455,11 +465,84 @@ exec の端末接続が Windows 固有の不確定要素）。
   引いていたが、作り直し版は手元の holder イメージで `stat` するので、外から何も取らない。
   オプトインした環境は `up` の警告・`list` の NOTE・`status` の boundary 行で常に示す。
 
-段階1 の残り: `open` と SSH 断片 / `logs` / `doctor` / `gpu`・`dev.Dockerfile` / シークレットと
-inject（GitHub トークン・init.sh — 移行で付いてこないもの）/ Releases への自動ビルド。`--json` 出力は形を決めてから（事実上の API）。
+段階1〜3 の進捗（2026-11-12 夜 — **この節の内容は Docker の無い環境で書いた**）:
 
-段階0 の残り: Windows での実行（macOS は確認済み）、exec の端末接続（root-shell）、inject ボリュームと
-sshd の StrictModes、ビルドの経路の決定（§12-2）、restart ポリシーでの自動復帰時の挙動の実測。
+進め方の決定（2026-11-12 夜）: **TS 版にあった機能を、TUI を含めて先に移す。** §6（inject
+ボリューム1本）と §7（var / secret への再編）は、実機でのスパイクが要る再設計なので後に回し、
+いまは TS 版の仕組み（`_github` / `_tokens` ボリューム、`init.sh` の読み取り専用 bind、
+`bh github` / `bh token`）をそのまま移した。移行した環境のトークンが何もせずに使い続けられる
+のはその帰結。データの退避（§8 — snapshot / export / import / archive）と `prune` も後回し。
+
+- **設定を編集するだけのコマンド**: `configure`（起動中は変えられない設定を止める）/ `rename`
+  （新規 — id が変わらないので Docker の資源は動かない）/ `key`（レジストリ・attach / detach）/
+  `remote add | configure | remove` / `create --from` / `down --all`。
+- **SSH 設定**（`internal/sshconfig`）: `~/.ssh/bh/config` に `Host bulkhead-<name>` を書き、
+  `~/.ssh/config` には印つきの Include 1行だけを足す。TS 版とは印もディレクトリも別。
+  `open`（VS Code）はこの項目経由。`destroy` は known_hosts の該当行を消す。
+- **コンテナの中へ届くもの**: `init.sh`（共通。雛形から作り、以後は触らない）/ `logs`（2つの
+  コンテナを行単位で混ぜ、どちらの行かを示す）/ `init`（bh-guest 経由で今すぐ実行）/
+  `root-shell`（特権つき root の exec + 端末の raw モード）。
+- **GPU**（legacy / cdi。CDI はデーモンの一覧と突き合わせ、使い捨てコンテナへ実際に差して
+  から、デバイスノードの gid を足す）と **dev.Dockerfile**（環境ごとのイメージ。トークンの
+  記録と env.json はビルドコンテキストに入れない）、`restart --rebuild [--pull] [--no-cache]`。
+- **トークン**: `github set | status | revoke` と `token list | set | remove`。ファイルの形と
+  ボリュームの中身は TS 版と同じ。書き込みは holder イメージの使い捨てコンテナ
+  （`--network none`、中身は標準入力）。
+- **doctor**: ホストの準備と、コンテナの実状態に対する不変条件の検査（`internal/doctor` —
+  純関数。期待値は `internal/plan` と同じ事実から）。**補完**（`completion zsh|bash`）。
+- **reset**: home と nix を消して作り直す。ボリュームを消すコードは `ops.removeVolumes` の
+  1か所で、呼ぶのは Destroy と Reset だけ（テストがソースを数える）。
+- **TUI**（`internal/tui` — Bubble Tea v2）: TS 版の並び（一覧の4区画・状態を名前の色で示す・
+  環境メニュー・Settings の Runtime / SSH・Maintenance・Keys・Machine key・確認ダイアログ・
+  起動中は変えられない設定のグレーアウト・events 購読と r・下段のメッセージと m）。
+  端末を明け渡すもの（ssh・logs・root shell・エディタ・再ビルド）は子プロセスへ渡して戻る。
+  環境名を省いたコマンド（`up` / `down` / `restart` / `logs` / `status` / `ssh` / `open`）は
+  端末なら選択を出す。
+- **ディスク使用量**: `status` と TUI の詳細に出す（一覧では取らない）。
+
+**実機で未確認のもの（まとめて確かめる）。** `scripts/verify-features.sh <bh>` が、専用の
+設定ディレクトリに使い捨ての環境を作って下の多くを確かめ、最後に消す。手で見るしかない
+ものには (手) を付けた。
+
+| 対象 | 確かめること |
+| --- | --- |
+| init.sh | 初回起動で1回走る / 中から書き換えられない / `bh init` で再実行できる |
+| トークンのボリューム | 中から書き換えられない / `bh token set` が新しいシェルに届き、`remove` で消える。書き込みは使い捨てコンテナ（標準入力の受け渡し・CHOWN / DAC_OVERRIDE / FOWNER だけの権限）で、**この経路は一度も実機で動いていない** — 所有者とモード（uid 1000・600）も見る |
+| GitHub トークン (手) | `bh github set` の発行画面の誘導・GitHub API での検証（持ち主・期限・リポジトリ）・書き込み、git と gh から使えること、`revoke`、`destroy` 時の失効。端末での非表示入力（Windows のコンソールを含む）とブラウザの起動 |
+| logs | 2つのコンテナの行が印つきで出る / follow が Ctrl-C で正常終了する |
+| root-shell (手) | root のシェルに入れる。矢印キー・ウィンドウの大きさの変更・終了後の端末の状態 |
+| dev.Dockerfile | 環境ごとのイメージがビルドされて使われる / ファイルを消すと基底へ戻る |
+| restart --rebuild (手) | `--pull --no-cache` で作り直され、コンテナが新しいイメージで起動する |
+| GPU (手・対応機のみ) | legacy / cdi の起動、`bh gpu list`、デバイスノードの gid |
+| reset | home と nix だけが消え、workspace とホスト鍵が残り、init.sh がもう一度走る |
+| rename | コンテナはそのまま、作り直すとホスト名が新しい名前になる |
+| 鍵の付け外し | attach した鍵で、次の `bh up` の後にログインできる |
+| SSH 設定 | 断片の項目で `ssh bulkhead-<name>` が通る / `bh open` (手) |
+| status / doctor | disk 行が出る / **起動した直後の環境で doctor が fail も warn も出さない**（`ContainerInspect` の項目の読み取り、Docker Desktop での `init.sh` のパスの照合、dev.Dockerfile つきの環境のイメージ名の照合が、偽物でしか試せていない） |
+| 補完 (手) | `eval "$(bh completion zsh)"` / bash で、コマンド・サブコマンド・環境名が補完される |
+| events (手) | TUI を開いたまま別の端末で `bh up` / `bh down` → 一覧が追従する |
+| TUI (手) | 実際の端末での描画・キー操作・shell-out からの復帰。Windows Terminal と macOS |
+| migrate の追加分 (手) | dev.Dockerfile・トークン・init.sh を持つ TS 版の環境の移行 |
+| Windows (手) | named pipe への接続、`init.sh` の bind（ドライブレターつきのパス）、root-shell |
+
+残り: データの退避（§8）/ `prune` / `--json`（形を決めてから — TS 版の形は compose の座標を
+含んでいて、そのままは移せない）/ Releases への自動ビルド / §6・§7 の再設計 / ビルドの経路の
+決定（§12-2）/ restart ポリシーでの自動復帰時の挙動の実測。
+
+TS 版と違うところ（移植で変えたもの）:
+
+- `rebuild` は `restart --rebuild`、`init-run` は `init`（§9 のとおり）。`remote list / status /
+  ssh / open` は無く、local と同じコマンドで扱う。`logs` は compose への素通しをやめ、
+  `--tail` / `--no-follow` / `--timestamps` を持つ。
+- `bh up` / `bh restart` は起動の前に、記録にあるトークンを2つのボリュームへ書き直す（TS 版と
+  同じ）。`destroy` は Docker 側を消した後で GitHub トークンを失効させる。
+- doctor: compose.override.yaml と生成物の検査は無くなり、**コンテナの実状態を `internal/plan` が
+  作るはずの仕様と比べる**。ホストのパスの bind は（init.sh とオプトインしたソケット以外）
+  すべて fail。「ビルドと checkout のずれ」の警告は、イメージが今の bh の作るものと違うときの
+  warn に置き換えた。
+- TUI の GitHub トークンの発行は preset だけを選ぶ（owner と期限を変えるのは CLI の
+  `bh github set --owner / --days`）。
+- 環境名を省いたときの選択は、状態を引かずに名前と接続先だけを並べる。
 
 ## 14. 開発環境（flake.nix の devShell）
 

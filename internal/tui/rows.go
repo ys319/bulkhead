@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ys319/bulkhead/internal/config"
+	"github.com/ys319/bulkhead/internal/doctor"
 	"github.com/ys319/bulkhead/internal/ops"
 )
 
@@ -65,14 +66,21 @@ func envStyle(state EnvState, reach reachState) style {
 		summary = state.Status.State()
 	}
 	running := summary == ops.StateRunning || summary == ops.StateStarting
+	// What doctor finds counts while the environment runs. Stopped, a
+	// container that is merely not running would paint every name red; it
+	// shows again when it is started.
+	found := doctor.OK
+	if running {
+		found = doctor.Worst(state.Findings)
+	}
 	switch {
 	case !state.Known:
 		return style{color: gray}
-	case summary == ops.StateDegraded:
+	case summary == ops.StateDegraded || found == doctor.Fail:
 		return style{color: red}
 	case state.Env.DockerSocket:
 		return style{color: magenta, dim: !running}
-	case summary == ops.StateStarting:
+	case summary == ops.StateStarting || found == doctor.Warn:
 		return style{color: yellow}
 	case summary == ops.StateRunning:
 		return style{color: green}

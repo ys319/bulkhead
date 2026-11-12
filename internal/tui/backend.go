@@ -10,6 +10,7 @@ import (
 	"os/exec"
 
 	"github.com/ys319/bulkhead/internal/config"
+	"github.com/ys319/bulkhead/internal/doctor"
 	"github.com/ys319/bulkhead/internal/ops"
 )
 
@@ -20,6 +21,19 @@ type EnvState struct {
 	// false when the engine could not be asked.
 	Status ops.Status
 	Known  bool
+	// Findings are what bh doctor finds about the environment now.
+	Findings []doctor.Finding
+	// Tokens are the credentials handed to the environment, without their
+	// values. TokenProblem says why their records could not be read.
+	Tokens       []Token
+	TokenProblem string
+}
+
+// Token is a credential handed to an environment.
+type Token struct {
+	Kind    string // "github", "hf" or "custom"
+	Name    string // the variable it is exported as
+	Summary string // GitHub's token in a line; empty for the others
 }
 
 // Snapshot is everything the list shows, read at one moment.
@@ -70,6 +84,20 @@ type Backend interface {
 	// it does not say.
 	CDIDevices(ctx context.Context) (devices []string, known bool, err error)
 	Addresses() []Address
+
+	// Tokens. Each returns what to tell the user when it worked; the
+	// values never come back.
+	SetToken(ctx context.Context, name, kind, tokenName, value string) (string, error)
+	RemoveToken(ctx context.Context, name, tokenName string) (string, error)
+	// TokenPage is where a token of the kind is issued; empty when there
+	// is no such page.
+	TokenPage(kind string) string
+	// GitHubIssue prepares issuing a GitHub token: the page that has the
+	// form filled in, and the name the token gets.
+	GitHubIssue(name, preset string) (address, tokenName string, err error)
+	SetGitHub(ctx context.Context, name, token, preset, tokenName string) (string, error)
+	RevokeGitHub(ctx context.Context, name string) (string, error)
+	OpenURL(address string) error
 
 	// Programs that take the terminal over until they end.
 	Shell(name string) (*exec.Cmd, error)        // an ssh session

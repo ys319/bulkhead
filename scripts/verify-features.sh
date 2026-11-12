@@ -102,12 +102,12 @@ echo "== token volumes =="
 refuse "github volume is read-only inside" dev sh -c 'echo x > /etc/bulkhead/github/x'
 refuse "tokens volume is read-only inside" dev sh -c 'echo x > /etc/bulkhead/tokens/x'
 if "$BH" token 2>&1 | grep -q 'token set'; then
-  check "token set (value on stdin)" bash -c "printf 'bh-verify-value' | \"$BH\" token set $NAME BH_VERIFY_TOKEN"
-  check "a new shell has the variable" bash -c "[ \"\$(docker exec bulkhead-$ID-dev zsh -c 'echo \$BH_VERIFY_TOKEN')\" = bh-verify-value ]"
+  check "token set (value on stdin)" bash -c "printf 'bh-verify-value' | \"$BH\" token set $NAME custom VERIFY_FEATURE_TOKEN"
+  check "a new shell has the variable" bash -c "[ \"\$(docker exec bulkhead-$ID-dev zsh -c 'echo \$VERIFY_FEATURE_TOKEN')\" = bh-verify-value ]"
   check "the file belongs to the dev user, mode 600" bash -c "[ \"\$(docker exec bulkhead-$ID-dev stat -c '%u %a' /etc/bulkhead/tokens/env)\" = '1000 600' ]"
-  check "token list names it" bash -c "\"$BH\" token list $NAME | grep -q BH_VERIFY_TOKEN"
-  check "token remove" "$BH" token remove "$NAME" BH_VERIFY_TOKEN
-  check "…and a new shell no longer has it" bash -c "[ -z \"\$(docker exec bulkhead-$ID-dev zsh -c 'echo \$BH_VERIFY_TOKEN')\" ]"
+  check "token list names it" bash -c "\"$BH\" token list $NAME | grep -q VERIFY_FEATURE_TOKEN"
+  check "token remove" "$BH" token remove "$NAME" VERIFY_FEATURE_TOKEN
+  check "…and a new shell no longer has it" bash -c "[ -z \"\$(docker exec bulkhead-$ID-dev zsh -c 'echo \$VERIFY_FEATURE_TOKEN')\" ]"
 else
   skip "bh token is not in this build"
 fi
