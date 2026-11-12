@@ -47,6 +47,10 @@ type Fake struct {
 	MissingImage func(ref string) bool
 	// Tags are the names images were given.
 	Tags map[string]string
+	// VolumeRuns are the scripts that were run on volumes, in order.
+	VolumeRuns []VolumeRun
+	// VolumeJobErr makes running a script on a volume fail.
+	VolumeJobErr error
 
 	nextID      int
 	holderPolls int
@@ -254,4 +258,36 @@ func (f *Fake) CDIDevices(context.Context) ([]string, bool, error) {
 func (f *Fake) DeviceGIDs(_ context.Context, _ string, devices []string) ([]int, error) {
 	f.log("probe-devices %s", strings.Join(devices, ","))
 	return f.DeviceGroups, nil
+}
+
+// VolumeRun is one script that was run on a volume.
+type VolumeRun struct {
+	Job engine.VolumeJob
+	// Input is what the script got on its standard input; nil when it was
+	// run without one.
+	Input []byte
+}
+
+// volumeJob records the job. Like the engine's own mount, it would bring a
+// missing volume into being without labels, so here that is an error.
+func (f *Fake) volumeJob(verb string, job engine.VolumeJob, input []byte) error {
+	f.log("%s %s", verb, job.Volume)
+	if f.VolumeJobErr != nil {
+		return f.VolumeJobErr
+	}
+	if !f.Volumes[job.Volume] {
+		return fmt.Errorf("the volume %s does not exist", job.Volume)
+	}
+	f.VolumeRuns = append(f.VolumeRuns, VolumeRun{Job: job, Input: input})
+	return nil
+}
+
+// WriteVolume records the script and its input.
+func (f *Fake) WriteVolume(_ context.Context, job engine.VolumeJob, input []byte) error {
+	return f.volumeJob("write-volume", job, append([]byte{}, input...))
+}
+
+// RunInVolume records the script.
+func (f *Fake) RunInVolume(_ context.Context, job engine.VolumeJob) error {
+	return f.volumeJob("run-in-volume", job, nil)
 }
