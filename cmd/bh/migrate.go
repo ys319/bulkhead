@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -66,6 +67,10 @@ type assessment struct {
 	blockers []string // reasons it cannot be migrated as things are
 	notes    []string // what will not come along
 	keys     []config.KeyEntry
+	// files of the environment's old directory that are copied to the new
+	// one, and whether the shared init.sh is copied too (bh has none yet).
+	files      []string
+	initScript bool
 	// resume: bh already has this environment's settings — an earlier run
 	// was interrupted after writing them. The rest is safe to repeat.
 	resume bool
@@ -87,22 +92,24 @@ func assess(legacy config.LegacyStore, store config.Store, name string) (assessm
 		if extras.Override {
 			block("it has a compose.override.yaml, and bh has nothing that takes its place (bh does not use Compose)")
 		}
-		if extras.DevDockerfile {
-			block("it has a dev.Dockerfile, which this build does not support yet")
+		if result.files, err = legacy.Files(name); err != nil {
+			return assessment{}, err
 		}
-		if env.GPU != "off" {
-			block("it asks for a GPU (gpu: %s), which this build does not support yet", env.GPU)
-		}
-		if extras.GitHubToken {
-			note("its GitHub token: this build has no secrets yet, so git and gh in the environment will be without it")
-		}
-		if extras.Tokens {
-			note("its other tokens (tokens.json): this build has no secrets yet")
+		if extras.GitHubToken || extras.Tokens {
+			note("managing its tokens: they stay in place in the environment and keep working (their volumes are used as they are, and their records are copied), but this build cannot yet change, renew or revoke them")
 		}
 		if extras.InitScript {
-			note("init.sh: this build does not run it yet")
+			theirs, _ := os.ReadFile(legacy.InitScript())
+			ours, err := os.ReadFile(store.InitScript())
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+				result.initScript = true
+			case err != nil:
+				return assessment{}, err
+			case !bytes.Equal(theirs, ours):
+				note("init.sh: bh already has its own (%s), which is the one that runs from now on; the TypeScript version's (%s) is not copied — merge them by hand if they differ in what matters", store.InitScript(), legacy.InitScript())
+			}
 		}
-		note("the ssh config entry bulkhead-%s (VS Code uses it): this build does not write one yet, and the TypeScript version drops the entry the next time it rewrites its ssh config. bh ssh %s works regardless", name, name)
 	}
 
 	// The keys it lets in must come along, or people are locked out.
@@ -226,7 +233,7 @@ func (a *app) migrateOne(ctx context.Context, legacy config.LegacyStore, store c
 	fmt.Fprintf(out, "  settings    carried over (id %s, ssh %s)\n", env.ID, sshAddress(env))
 	if env.Local() {
 		fmt.Fprintln(out, "  volumes     used as they are — not copied, not removed:")
-		for _, key := range plan.VolumeKeys {
+		for _, key := range plan.AllVolumeKeys() {
 			volume := plan.Volume(env.ID, key)
 			exists, err := eng.VolumeExists(ctx, volume)
 			if err != nil {
@@ -260,6 +267,12 @@ func (a *app) migrateOne(ctx context.Context, legacy config.LegacyStore, store c
 			fmt.Fprintf(out, "  warning     %s\n", socketWarning)
 		}
 	}
+	if len(result.files) > 0 {
+		fmt.Fprintf(out, "  files       copied to %s: %s\n", store.EnvDir(env.ID), strings.Join(result.files, ", "))
+	}
+	if result.initScript {
+		fmt.Fprintf(out, "  init.sh     copied to %s (bh has none yet)\n", store.InitScript())
+	}
 	fmt.Fprintf(out, "  afterwards  the old settings move to %s\n              (kept; the TypeScript version no longer lists the environment)\n", legacy.RetiredDir(name))
 	if len(result.notes) > 0 {
 		fmt.Fprintln(out, "\n  not coming along:")
@@ -288,6 +301,18 @@ func (a *app) migrateOne(ctx context.Context, legacy config.LegacyStore, store c
 	if err := store.AddKeys(keys); err != nil {
 		return err
 	}
+	// What the containers are created from besides the settings.
+	if result.initScript {
+		if err := copyFile(legacy.InitScript(), store.InitScript(), 0o755); err != nil {
+			return fmt.Errorf("copying init.sh: %w", err)
+		}
+	}
+	for _, file := range result.files {
+		target := filepath.Join(store.EnvDir(env.ID), file)
+		if err := copyFile(filepath.Join(legacy.EnvDir(name), file), target, 0); err != nil {
+			return fmt.Errorf("copying %s: %w", file, err)
+		}
+	}
 
 	adoption := ops.Adoption{}
 	if env.Local() {
@@ -295,7 +320,7 @@ func (a *app) migrateOne(ctx context.Context, legacy config.LegacyStore, store c
 		if err != nil {
 			return err
 		}
-		if err := a.realize(ctx, eng, &planned, &target); err != nil {
+		if err := a.realize(ctx, eng, store, &planned, &target, nil); err != nil {
 			return err
 		}
 		if adoption, err = (ops.Runner{Engine: eng}).Adopt(ctx, planned, target); err != nil {
@@ -324,19 +349,6 @@ func (a *app) migrateOne(ctx context.Context, legacy config.LegacyStore, store c
 	fmt.Fprintf(out, "  old settings: %s\n", legacy.RetiredDir(name))
 	for _, leftover := range adoption.Leftovers {
 		fmt.Fprintf(out, "  left behind (remove by hand): %s\n", leftover)
-	}
-	if env.Local() {
-		// Volumes only the TypeScript version used. bh removes no volume
-		// here, not even these.
-		var unused []string
-		for _, key := range []string{"github", "tokens"} {
-			if exists, _ := eng.VolumeExists(ctx, plan.Volume(env.ID, key)); exists {
-				unused = append(unused, plan.Volume(env.ID, key))
-			}
-		}
-		if len(unused) > 0 {
-			fmt.Fprintf(out, "  no longer used, left in place: the volumes %s\n", strings.Join(unused, ", "))
-		}
 	}
 	fmt.Fprintf(out, "  to hand it back to the TypeScript version: bh migrate --undo %s\n", name)
 	return nil
@@ -453,4 +465,39 @@ func (a *app) migrateUndo(ctx context.Context, legacy config.LegacyStore, store 
 		fmt.Fprintln(out, "  Until then no container refers to its volumes: do not run `docker volume prune -a`.")
 	}
 	return nil
+}
+
+// copyFile copies a file to a place where there is none yet; a file that
+// is already there (an interrupted earlier run) is left as it is. mode 0
+// keeps the mode of the original.
+func copyFile(from, to string, mode fs.FileMode) error {
+	data, err := os.ReadFile(from)
+	if err != nil {
+		return err
+	}
+	if mode == 0 {
+		info, err := os.Stat(from)
+		if err != nil {
+			return err
+		}
+		mode = info.Mode().Perm()
+	}
+	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if errors.Is(err, fs.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(to, mode)
 }

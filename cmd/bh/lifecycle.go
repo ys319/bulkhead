@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/ys319/bulkhead/containers"
@@ -171,18 +172,45 @@ func (a *app) localEnv(command, ref string) (config.Store, config.Environment, e
 	return store, env, nil
 }
 
-// containersFor turns the settings on disk into what the containers are
-// created from, except the images.
-func containersFor(store config.Store, env config.Environment) (plan.Env, plan.Target, error) {
-	// Settings this build reads but cannot realize yet. Refusing is the
-	// honest answer: starting without them would look like success.
-	if env.GPU != "off" {
-		return plan.Env{}, plan.Target{}, fmt.Errorf("%q asks for a GPU (gpu: %s), which this build does not support yet", env.Name, env.GPU)
-	}
-	if _, err := os.Stat(store.DevDockerfile(env.ID)); err == nil {
-		return plan.Env{}, plan.Target{}, fmt.Errorf("%q has a dev.Dockerfile, which this build does not support yet", env.Name)
-	}
+// initScriptTemplate is what a new init.sh starts as. The file is the
+// user's from then on.
+const initScriptTemplate = `#!/usr/bin/env zsh
+# bulkhead init script — runs once as the developer user on the first boot of
+# a fresh home volume (bh create / bh reset), before sshd starts. A failure
+# aborts the boot; the next start retries. This file is yours to edit.
+# It is run with zsh, so nix from the image is on PATH.
+#
+# Example: deploy your Claude Code config / dotfiles
+#   git clone https://github.com/<you>/dotfiles.git ~/dotfiles
+#   cd ~/dotfiles && ./deploy.sh
+`
 
+// ensureInitScript returns the path of init.sh, shared by all environments,
+// making it from the template when it is missing. It has to exist before a
+// container mounts it. An existing file is never touched, permissions
+// included.
+func ensureInitScript(store config.Store) (string, error) {
+	path := store.InitScript()
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	if err := os.MkdirAll(store.Dir, 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(initScriptTemplate), 0o755); err != nil {
+		return "", err
+	}
+	// WriteFile's mode is cut by the umask; with 077 the developer user in
+	// the container (another uid on some Linux hosts) could not read it,
+	// and the first boot would stop.
+	return path, os.Chmod(path, 0o755)
+}
+
+// containersFor turns the settings on disk into what the containers are
+// created from, except what only the engine can tell (realize).
+func containersFor(store config.Store, env config.Environment) (plan.Env, plan.Target, error) {
 	owner, err := store.Owner()
 	if err != nil {
 		return plan.Env{}, plan.Target{}, err
@@ -199,11 +227,21 @@ func containersFor(store config.Store, env config.Environment) (plan.Env, plan.T
 	if err != nil {
 		return plan.Env{}, plan.Target{}, err
 	}
+	if env.GPU == "cdi" && len(env.CDIDevices) == 0 {
+		return plan.Env{}, plan.Target{}, fmt.Errorf("%q uses gpu: cdi but no device is chosen — bh configure %s --cdi-devices <name,...> (bh gpu list shows them)", env.Name, env.Name)
+	}
+	initScript, err := ensureInitScript(store)
+	if err != nil {
+		return plan.Env{}, plan.Target{}, fmt.Errorf("preparing init.sh: %w", err)
+	}
 
 	return plan.Env{
 		ID: env.ID, Name: env.Name, SSHPort: env.SSHPort, Publish: env.Publish, Restart: env.Restart,
 		AuthorizedKeys: append([]string{machineKey}, registered...),
 		DockerSocket:   env.DockerSocket,
+		InitScript:     initScript,
+		GPU:            env.GPU,
+		CDIDevices:     env.CDIDevices,
 	}, plan.Target{Owner: owner}, nil
 }
 
@@ -211,38 +249,129 @@ func containersFor(store config.Store, env config.Environment) (plan.Env, plan.T
 // or shown: the opt-in is allowed, forgetting about it is not.
 const socketWarning = "the Docker socket is mounted (dockerSocket: true) — this environment is not isolated from the host"
 
+// Image names. The base of dev also gets the plain name devBaseAlias, which
+// is what a dev.Dockerfile starts FROM.
+const (
+	holderRepo   = "bulkhead-holder"
+	devBaseRepo  = "bulkhead-dev-base"
+	devBaseAlias = devBaseRepo + ":latest"
+)
+
+// devImageRepo is the image of an environment with its own dev.Dockerfile.
+func devImageRepo(id string) string { return "bulkhead-dev-" + id }
+
+// keptOutOfBuilds: files in an environment's directory that are bh's, not
+// part of the user's build context. The token files among them hold secrets.
+func keptOutOfBuilds(name string) bool {
+	switch name {
+	case "env.json", "github.json", "tokens.json":
+		return true
+	}
+	return strings.HasSuffix(name, ".tmp") || strings.HasPrefix(name, ".")
+}
+
 // realize fills in what only the engine can tell: the images (built unless
-// it already has them) and, with the socket opt-in, the socket's group.
-func (a *app) realize(ctx context.Context, eng dockerEngine, env *plan.Env, target *plan.Target) (err error) {
+// it already has them, or in any case with rebuild), the socket's group
+// with the opt-in, and the groups of the GPU devices.
+func (a *app) realize(ctx context.Context, eng dockerEngine, store config.Store, env *plan.Env, target *plan.Target, rebuild *image.Options) (err error) {
 	target.HolderImage, err = image.Ensure(ctx, eng, a.builder,
-		image.Source{Repo: "bulkhead-holder", FS: containers.FS, Dir: "holder"}, a.stderr)
+		image.Source{Repo: holderRepo, FS: containers.FS, Dir: "holder"}, a.stderr)
 	if err != nil {
 		return err
 	}
-	target.DevImage, err = image.Ensure(ctx, eng, a.builder,
-		image.Source{Repo: "bulkhead-dev-base", FS: containers.FS, Dir: "dev"}, a.stderr)
-	if err != nil || !env.DockerSocket {
+	target.DevImage, err = image.EnsureWith(ctx, eng, a.builder,
+		image.Source{Repo: devBaseRepo, FS: containers.FS, Dir: "dev"}, rebuild, a.stderr)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stderr, "bh: warning: %s: %s\n", env.Name, socketWarning)
-	env.SocketGID, err = eng.SocketGID(ctx, target.HolderImage)
-	return err
+
+	// The environment's own image, when it has a dev.Dockerfile: the user's
+	// steps on top of the base.
+	if _, statErr := os.Stat(store.DevDockerfile(env.ID)); statErr == nil {
+		if err := eng.TagImage(ctx, target.DevImage, devBaseAlias); err != nil {
+			return fmt.Errorf("naming the base image for dev.Dockerfile: %w", err)
+		}
+		var again *image.Options
+		if rebuild != nil {
+			// Not Pull: the base exists on this machine only.
+			again = &image.Options{NoCache: rebuild.NoCache}
+		}
+		target.DevImage, err = image.EnsureWith(ctx, eng, a.builder, image.Source{
+			Repo: devImageRepo(env.ID), FS: os.DirFS(store.EnvDir(env.ID)), Dir: ".",
+			Dockerfile: "dev.Dockerfile", Skip: keptOutOfBuilds, Base: target.DevImage,
+		}, again, a.stderr)
+		if err != nil {
+			return fmt.Errorf("building %s: %w", store.DevDockerfile(env.ID), err)
+		}
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return statErr
+	}
+
+	if env.DockerSocket {
+		fmt.Fprintf(a.stderr, "bh: warning: %s: %s\n", env.Name, socketWarning)
+		if env.SocketGID, err = eng.SocketGID(ctx, target.HolderImage); err != nil {
+			return err
+		}
+	}
+	if env.GPU == "cdi" {
+		known, reported, err := eng.CDIDevices(ctx)
+		if err != nil {
+			return err
+		}
+		if reported {
+			var missing []string
+			for _, device := range env.CDIDevices {
+				if !slices.Contains(known, device) {
+					missing = append(missing, device)
+				}
+			}
+			if len(missing) > 0 {
+				available := strings.Join(known, ", ")
+				if available == "" {
+					available = "(none)"
+				}
+				return fmt.Errorf("CDI device not found on this Docker engine: %s\navailable: %s", strings.Join(missing, ", "), available)
+			}
+		}
+		if env.DeviceGIDs, err = eng.DeviceGIDs(ctx, target.HolderImage, env.CDIDevices); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *app) up(ctx context.Context, args []string) error {
-	return a.start(ctx, "up", args, ops.Runner.Up)
-}
-
-func (a *app) restart(ctx context.Context, args []string) error {
-	return a.start(ctx, "restart", args, ops.Runner.Restart)
-}
-
-func (a *app) start(ctx context.Context, command string, args []string,
-	run func(ops.Runner, context.Context, plan.Env, plan.Target) error) error {
-	ref, err := oneEnv(command, args)
+	ref, err := oneEnv("up", args)
 	if err != nil {
 		return err
 	}
+	return a.start(ctx, "up", ref, nil, ops.Runner.Up)
+}
+
+func (a *app) restart(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("restart", flag.ContinueOnError)
+	rebuild := flags.Bool("rebuild", false, "")
+	pull := flags.Bool("pull", false, "")
+	noCache := flags.Bool("no-cache", false, "")
+	rest, err := parseFlags(flags, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		return usagef("usage: bh restart <env> [--rebuild [--pull] [--no-cache]]")
+	}
+	var options *image.Options
+	switch {
+	case *rebuild:
+		options = &image.Options{Pull: *pull, NoCache: *noCache}
+	case *pull || *noCache:
+		return usagef("--pull and --no-cache go with --rebuild")
+	}
+	return a.start(ctx, "restart", rest[0], options, ops.Runner.Restart)
+}
+
+func (a *app) start(ctx context.Context, command, ref string, rebuild *image.Options,
+	run func(ops.Runner, context.Context, plan.Env, plan.Target) error) error {
 	store, env, err := a.localEnv(command, ref)
 	if err != nil {
 		return err
@@ -256,7 +385,7 @@ func (a *app) start(ctx context.Context, command string, args []string,
 		return err
 	}
 	defer disconnect()
-	if err := a.realize(ctx, eng, &planned, &target); err != nil {
+	if err := a.realize(ctx, eng, store, &planned, &target, rebuild); err != nil {
 		return err
 	}
 	if err := run(ops.Runner{Engine: eng}, ctx, planned, target); err != nil {

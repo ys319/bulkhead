@@ -71,7 +71,7 @@ func TestMigrateTakesOverARunningEnvironment(t *testing.T) {
 	for _, part := range []string{
 		"used as they are — not copied, not removed", "bulkhead-web_workspace (exists)",
 		"it is running", "Migrated \"web\"", "it is up in the new containers",
-		"no longer used, left in place: the volumes bulkhead-web_github, bulkhead-web_tokens",
+		"bulkhead-web_github (exists)",
 		"bh migrate --undo web",
 	} {
 		if !strings.Contains(out, part) {
@@ -141,8 +141,6 @@ func TestMigrateRefusesWhatItCannotCarry(t *testing.T) {
 		want  string
 	}{
 		{"an override", func(b *bench, dir string) { b.write(filepath.Join(dir, "compose.override.yaml"), "services: {}\n") }, legacyWeb, "compose.override.yaml"},
-		{"a dev.Dockerfile", func(b *bench, dir string) { b.write(filepath.Join(dir, "dev.Dockerfile"), "FROM x\n") }, legacyWeb, "dev.Dockerfile"},
-		{"a GPU", nil, `{"type": "local", "sshPort": 22001, "gpu": "legacy"}`, "GPU"},
 		{"a key that is not registered", nil, `{"type": "local", "sshPort": 22001, "authorizedKeys": ["SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]}`, "keys.json"},
 		{"a name bh already uses", func(b *bench, _ string) { b.ok("create", "web", "--port", "23000") }, legacyWeb, `already has an environment named "web"`},
 		{"a port bh already uses", func(b *bench, _ string) { b.ok("create", "other", "--port", "22001") }, legacyWeb, "ssh port 22001 is already used"},
@@ -292,7 +290,7 @@ func TestMigrateListAndRemote(t *testing.T) {
 		t.Errorf("empty: %s", out)
 	}
 	b.legacyEnv("web", legacyWeb)
-	b.legacyEnv("gpu", `{"type": "local", "sshPort": 22002, "gpu": "cdi", "cdiDevices": ["nvidia.com/gpu=0"]}`)
+	b.write(filepath.Join(b.legacyEnv("gpu", `{"type": "local", "sshPort": 22002, "gpu": "cdi", "cdiDevices": ["nvidia.com/gpu=0"]}`), "compose.override.yaml"), "services: {}\n")
 	b.legacyEnv("box", `{"type": "remote", "host": "example.com", "sshPort": 22}`)
 
 	out := b.ok("migrate")
@@ -302,7 +300,7 @@ func TestMigrateListAndRemote(t *testing.T) {
 			rows[fields[0]] = strings.Join(fields[2:], " ")
 		}
 	}
-	if rows["web"] != "ready" || rows["box"] != "ready" || !strings.HasPrefix(rows["gpu"], "blocked: it asks for a GPU") {
+	if rows["web"] != "ready" || rows["box"] != "ready" || !strings.HasPrefix(rows["gpu"], "blocked: it has a compose.override.yaml") {
 		t.Errorf("list:\n%s", out)
 	}
 	if len(b.engine.Calls) != 0 || exists(b.dir) {
@@ -351,5 +349,55 @@ func TestMigrateNeedsTwoDirectories(t *testing.T) {
 	b.legacy = b.dir
 	if stderr := b.fails(1, "migrate"); !strings.Contains(stderr, "same directory") {
 		t.Errorf("stderr: %s", stderr)
+	}
+}
+
+func TestMigrateBringsTheEnvironmentsFilesAndInitScript(t *testing.T) {
+	b := newBench(t)
+	dir := b.legacyEnv("web", `{"type": "local", "sshPort": 22001, "gpu": "legacy"}`)
+	b.write(filepath.Join(dir, "dev.Dockerfile"), "FROM bulkhead-dev-base\nCOPY files/app.conf /etc/app.conf\n")
+	os.MkdirAll(filepath.Join(dir, "files"), 0o755)
+	b.write(filepath.Join(dir, "files", "app.conf"), "x=1\n")
+	b.write(filepath.Join(dir, "github.json"), `{"preset": "read"}`)
+	b.write(filepath.Join(b.legacy, "init.sh"), "echo theirs\n")
+	b.engine.AddLegacy("web", false)
+
+	out := b.ok("migrate", "web", "--yes")
+	for _, part := range []string{"dev.Dockerfile", "files/app.conf", "github.json", "init.sh     copied", "managing its tokens"} {
+		if !strings.Contains(out, part) {
+			t.Errorf("output lacks %q:\n%s", part, out)
+		}
+	}
+	store := config.Store{Dir: b.dir}
+	for file, want := range map[string]string{
+		"dev.Dockerfile": "FROM bulkhead-dev-base\nCOPY files/app.conf /etc/app.conf\n",
+		"files/app.conf": "x=1\n",
+		"github.json":    `{"preset": "read"}`,
+	} {
+		if data, _ := os.ReadFile(filepath.Join(store.EnvDir("web"), filepath.FromSlash(file))); string(data) != want {
+			t.Errorf("%s = %q", file, data)
+		}
+	}
+	// What the old version generated for itself stays behind.
+	if exists(filepath.Join(store.EnvDir("web"), "compose.yaml")) {
+		t.Error("compose.yaml was copied")
+	}
+	if data, _ := os.ReadFile(store.InitScript()); string(data) != "echo theirs\n" {
+		t.Errorf("init.sh = %q", data)
+	}
+	if b.env("web").GPU != "legacy" {
+		t.Errorf("gpu = %s", b.env("web").GPU)
+	}
+
+	// A second environment does not replace the init.sh bh now has.
+	b.legacyEnv("api", `{"type": "local", "sshPort": 22002}`)
+	b.write(filepath.Join(b.legacy, "init.sh"), "echo changed since\n")
+	b.engine.AddLegacy("api", false)
+	out = b.ok("migrate", "api", "--yes")
+	if !strings.Contains(out, "bh already has its own") {
+		t.Errorf("output does not mention the differing init.sh:\n%s", out)
+	}
+	if data, _ := os.ReadFile(store.InitScript()); string(data) != "echo theirs\n" {
+		t.Errorf("init.sh was replaced: %q", data)
 	}
 }

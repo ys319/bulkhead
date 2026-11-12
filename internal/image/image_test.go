@@ -77,7 +77,7 @@ func (f fakeEngine) ImageExists(_ context.Context, ref string) (bool, error) {
 
 type fakeBuilder struct{ built []string }
 
-func (f *fakeBuilder) Build(_ context.Context, ref string, _ Source, _ io.Writer) error {
+func (f *fakeBuilder) Build(_ context.Context, ref string, _ Source, _ Options, _ io.Writer) error {
 	f.built = append(f.built, ref)
 	return nil
 }

@@ -19,7 +19,7 @@ import (
 // noBuild fails the test if a command tries to build an image.
 type noBuild struct{ t *testing.T }
 
-func (b noBuild) Build(context.Context, string, image.Source, io.Writer) error {
+func (b noBuild) Build(context.Context, string, image.Source, image.Options, io.Writer) error {
 	b.t.Error("a build was started")
 	return errors.New("no builds in tests")
 }
@@ -38,6 +38,8 @@ type bench struct {
 	tools   []string        // programs of the host that were run, with their arguments
 	path    map[string]bool // programs in PATH
 	typing  bool            // stdin is a terminal
+	builder image.Builder   // nil: any build fails the test
+	raw     int             // how often the terminal was put in raw mode
 }
 
 func newBench(t *testing.T) *bench {
@@ -52,6 +54,10 @@ func newBench(t *testing.T) *bench {
 func (b *bench) run(args ...string) (code int, stdout, stderr string) {
 	b.t.Helper()
 	var out, errOut bytes.Buffer
+	var builder image.Builder = noBuild{b.t}
+	if b.builder != nil {
+		builder = b.builder
+	}
 	a := &app{
 		stdin: strings.NewReader(b.stdin), stdout: &out, stderr: &errOut,
 		getenv: func(key string) string {
@@ -73,7 +79,11 @@ func (b *bench) run(args ...string) (code int, stdout, stderr string) {
 			b.sshArgs = args
 			return b.sshExit, nil
 		},
-		builder: noBuild{b.t},
+		builder: builder,
+		rawTerminal: func() (func(), func() (uint, uint), error) {
+			b.raw++
+			return func() {}, func() (uint, uint) { return 40, 120 }, nil
+		},
 		tool: func(name string, args []string) (string, error) {
 			b.tools = append(b.tools, name+" "+strings.Join(args, " "))
 			return "", nil
@@ -240,8 +250,8 @@ func TestUpRefusesWhatItCannotRealize(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	change(func(e *config.Environment) { e.GPU = "legacy" })
-	if stderr := b.fails(1, "up", "web"); !strings.Contains(stderr, "GPU") {
+	change(func(e *config.Environment) { e.GPU = "cdi" })
+	if stderr := b.fails(1, "up", "web"); !strings.Contains(stderr, "no device is chosen") {
 		t.Errorf("stderr: %s", stderr)
 	}
 	change(func(e *config.Environment) {

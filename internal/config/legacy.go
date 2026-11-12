@@ -141,3 +141,36 @@ func moveDir(from, to string) error {
 	}
 	return os.Rename(from, to)
 }
+
+// generatedByLegacy: files in an environment's directory that the
+// TypeScript version wrote for itself. Everything else there is the user's
+// (dev.Dockerfile, files it copies into the image) or state that bh reads
+// too (the token records).
+func generatedByLegacy(name string) bool {
+	switch name {
+	case "env.json", "compose.yaml", "compose.override.yaml", ".DS_Store", "Thumbs.db", "desktop.ini":
+		return true
+	}
+	return strings.HasSuffix(name, ".tmp")
+}
+
+// Files are the files of the environment's directory that come along when
+// bh takes it over, as paths relative to that directory.
+func (l LegacyStore) Files(name string) ([]string, error) {
+	root := os.DirFS(l.EnvDir(name))
+	var files []string
+	err := fs.WalkDir(root, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !entry.Type().IsRegular() || generatedByLegacy(entry.Name()) {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	return files, err
+}
+
+// InitScript is the TypeScript version's init.sh, shared by its environments.
+func (l LegacyStore) InitScript() string { return filepath.Join(l.Dir, "init.sh") }

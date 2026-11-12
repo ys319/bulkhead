@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,12 +34,27 @@ const (
 // the ssh host identity.
 var VolumeKeys = []string{"workspace", "home", "nix", "hostkeys"}
 
+// InjectKeys are the volumes that carry credentials from the host into the
+// environment: written only by bh on the host, mounted read-only in dev.
+// They are the names and mount points of the TypeScript version, so what an
+// environment had there is still in place after bh migrate.
+var InjectKeys = []string{"github", "tokens"}
+
+// AllVolumeKeys are all the volumes of an environment: what up creates and
+// destroy removes.
+func AllVolumeKeys() []string { return append(append([]string{}, VolumeKeys...), InjectKeys...) }
+
 var volumeTargets = map[string]string{
 	"home":      "/home/developer",
 	"workspace": "/home/developer/workspace",
 	"nix":       "/nix",
 	"hostkeys":  "/etc/bulkhead/hostkeys",
+	"github":    "/etc/bulkhead/github",
+	"tokens":    "/etc/bulkhead/tokens",
 }
+
+// InitScriptTarget is where dev finds the init script (bh-guest init).
+const InitScriptTarget = "/etc/bulkhead/init.sh"
 
 // Env is what an environment's settings say about its containers.
 type Env struct {
@@ -55,6 +71,18 @@ type Env struct {
 	// owns the socket as the engine sees it; dev's user is added to it.
 	DockerSocket bool
 	SocketGID    int
+
+	// InitScript is the host path of the init script, mounted read-only.
+	// Empty mounts nothing (bh-guest then has nothing to run).
+	InitScript string
+
+	// GPU is "off" (or empty), "legacy" (every GPU, through the NVIDIA
+	// runtime) or "cdi" (the CDIDevices). A device request adds no
+	// capability: dev still has none. DeviceGIDs are the groups that own the
+	// device nodes when those are not open to everyone; dev's user joins them.
+	GPU        string
+	CDIDevices []string
+	DeviceGIDs []int
 }
 
 // DockerSocketPath is where the engine's socket is, on the engine's side
@@ -155,12 +183,27 @@ func Holder(env Env, target Target) Container {
 // holder is a separate check (its NetworkMode).
 func Dev(env Env, target Target, holderID string) Container {
 	init := true
-	mounts := make([]mount.Mount, 0, len(VolumeKeys))
+	mounts := make([]mount.Mount, 0, len(VolumeKeys)+len(InjectKeys)+2)
 	for _, key := range VolumeKeys {
 		mounts = append(mounts, mount.Mount{
 			Type:   mount.TypeVolume,
 			Source: Volume(env.ID, key),
 			Target: volumeTargets[key],
+		})
+	}
+	for _, key := range InjectKeys {
+		mounts = append(mounts, mount.Mount{
+			Type:     mount.TypeVolume,
+			Source:   Volume(env.ID, key),
+			Target:   volumeTargets[key],
+			ReadOnly: true,
+		})
+	}
+	if env.InitScript != "" {
+		// The one file of the host that dev sees. A bind given as a mount
+		// fails when the file is missing, instead of making a directory.
+		mounts = append(mounts, mount.Mount{
+			Type: mount.TypeBind, Source: env.InitScript, Target: InitScriptTarget, ReadOnly: true,
 		})
 	}
 
@@ -185,9 +228,14 @@ func Dev(env Env, target Target, holderID string) Container {
 		spec.Host.Mounts = append(spec.Host.Mounts, mount.Mount{
 			Type: mount.TypeBind, Source: DockerSocketPath, Target: DockerSocketPath,
 		})
-		// The socket is not writable by others; dev's user is not root.
-		spec.Host.GroupAdd = []string{strconv.Itoa(env.SocketGID)}
 	}
+	switch env.GPU {
+	case "legacy":
+		spec.Host.DeviceRequests = []container.DeviceRequest{{Count: -1, Capabilities: [][]string{{"gpu"}}}}
+	case "cdi":
+		spec.Host.DeviceRequests = []container.DeviceRequest{{Driver: "cdi", DeviceIDs: append([]string{}, env.CDIDevices...)}}
+	}
+	spec.Host.GroupAdd = groups(env)
 	spec = withSpecLabel(spec)
 	spec.Host.NetworkMode = container.NetworkMode(JoinMode(holderID))
 	return spec
@@ -236,3 +284,26 @@ const LegacyProjectLabel = "com.docker.compose.project"
 
 // LegacyProject is the Compose project of the environment called name.
 func LegacyProject(name string) string { return project(name) }
+
+// groups are the supplementary groups of dev's user: the owner of the
+// Docker socket (with the opt-in) and of the GPU device nodes, without
+// repeats. dev's user is not root, and neither is writable by others.
+func groups(env Env) []string {
+	var gids []int
+	if env.DockerSocket {
+		gids = append(gids, env.SocketGID)
+	}
+	if env.GPU == "cdi" {
+		gids = append(gids, env.DeviceGIDs...)
+	}
+	slices.Sort(gids)
+	gids = slices.Compact(gids)
+	if len(gids) == 0 {
+		return nil
+	}
+	list := make([]string, len(gids))
+	for i, gid := range gids {
+		list[i] = strconv.Itoa(gid)
+	}
+	return list
+}

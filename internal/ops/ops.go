@@ -72,7 +72,7 @@ func (r Runner) Up(ctx context.Context, env plan.Env, target plan.Target) error 
 	if err := eng.EnsureNetwork(ctx, plan.Network(env.ID), plan.Labels(target.Owner, env.ID, "network")); err != nil {
 		return fmt.Errorf("preparing the network: %w", err)
 	}
-	for _, key := range plan.VolumeKeys {
+	for _, key := range plan.AllVolumeKeys() {
 		if err := eng.EnsureVolume(ctx, plan.Volume(env.ID, key), plan.Labels(target.Owner, env.ID, key)); err != nil {
 			return fmt.Errorf("preparing the %s volume: %w", key, err)
 		}
@@ -257,12 +257,13 @@ func (r Runner) Down(ctx context.Context, id string) error {
 }
 
 // Destroy removes everything the environment has in Docker: containers,
-// volumes (the data) and the network. The caller confirms first.
+// volumes (the data, and the credentials bh put there) and the network.
+// The caller confirms first. This is the only place a volume is removed.
 func (r Runner) Destroy(ctx context.Context, id string) error {
 	if err := r.removeContainers(ctx, id); err != nil {
 		return err
 	}
-	for _, key := range plan.VolumeKeys {
+	for _, key := range plan.AllVolumeKeys() {
 		if err := r.Engine.RemoveVolume(ctx, plan.Volume(id, key)); err != nil {
 			return fmt.Errorf("removing the %s volume: %w", key, err)
 		}

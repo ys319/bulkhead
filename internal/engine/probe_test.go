@@ -23,3 +23,13 @@ func TestParseSocketProbe(t *testing.T) {
 		}
 	}
 }
+
+func TestParseDeviceProbe(t *testing.T) {
+	out := "0 666 /dev/null\n44 660 /dev/nvidia0\n44 660 /dev/nvidiactl\n110 660 /dev/dri/renderD128\n0 660 /dev/kmsg\n5 666 /dev/tty\nnoise\n"
+	if got := ParseDeviceProbe(out); len(got) != 2 || got[0] != 44 || got[1] != 110 {
+		t.Errorf("gids = %v, want [44 110]", got)
+	}
+	if got := ParseDeviceProbe(""); len(got) != 0 {
+		t.Errorf("empty output: %v", got)
+	}
+}

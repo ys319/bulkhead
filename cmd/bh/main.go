@@ -29,7 +29,7 @@ func main() {
 		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
 		getenv: os.Getenv, goos: runtime.GOOS,
 		dial: dialEngine, ssh: systemSSH, builder: engine.CLIBuilder{},
-		tool: runTool, lookPath: exec.LookPath, isTerminal: stdinIsTerminal,
+		tool: runTool, lookPath: exec.LookPath, isTerminal: stdinIsTerminal, rawTerminal: rawTerminal,
 	}
 	os.Exit(a.run(ctx, os.Args[1:]))
 }
@@ -40,6 +40,11 @@ type dockerEngine interface {
 	image.Exister
 	VolumeExists(ctx context.Context, name string) (bool, error)
 	SocketGID(ctx context.Context, image string) (int, error)
+	TagImage(ctx context.Context, source, target string) error
+	CDIDevices(ctx context.Context) (devices []string, known bool, err error)
+	DeviceGIDs(ctx context.Context, image string, devices []string) ([]int, error)
+	Logs(ctx context.Context, id string, opts engine.LogOptions, out io.Writer) error
+	Exec(ctx context.Context, id string, spec engine.ExecSpec, streams engine.Streams) (int, error)
 }
 
 // app is one invocation of bh with its surroundings, so that tests can
@@ -61,6 +66,10 @@ type app struct {
 	lookPath func(name string) (string, error)
 	// isTerminal: stdin is somebody typing.
 	isTerminal func() bool
+	// rawTerminal hands the terminal to a program running elsewhere: keys
+	// go through unprocessed until restore is called. size reports the
+	// terminal's size.
+	rawTerminal func() (restore func(), size func() (height, width uint), err error)
 }
 
 // usageError is a wrong invocation: exit code 2, no "bh:" prefix games.
@@ -114,22 +123,26 @@ func (a *app) run(ctx context.Context, args []string) int {
 		return 2
 	}
 	commands := map[string]func(context.Context, []string) error{
-		"create":    a.create,
-		"configure": a.configure,
-		"rename":    a.rename,
-		"up":        a.up,
-		"down":      a.down,
-		"restart":   a.restart,
-		"list":      a.list,
-		"status":    a.status,
-		"ssh":       a.sshInto,
-		"open":      a.open,
-		"key":       a.key,
-		"remote":    a.remote,
-		"path":      a.path,
-		"destroy":   a.destroy,
-		"migrate":   a.migrate,
-		"version":   a.version,
+		"create":     a.create,
+		"configure":  a.configure,
+		"rename":     a.rename,
+		"up":         a.up,
+		"down":       a.down,
+		"restart":    a.restart,
+		"list":       a.list,
+		"status":     a.status,
+		"ssh":        a.sshInto,
+		"open":       a.open,
+		"key":        a.key,
+		"remote":     a.remote,
+		"logs":       a.logs,
+		"init":       a.initRun,
+		"root-shell": a.rootShell,
+		"gpu":        a.gpu,
+		"path":       a.path,
+		"destroy":    a.destroy,
+		"migrate":    a.migrate,
+		"version":    a.version,
 	}
 	name := args[0]
 	switch name {

@@ -255,6 +255,7 @@ func TestDestroyRemovesContainersVolumesAndNetwork(t *testing.T) {
 		"remove "+devName, "remove "+holderName,
 		"rm-volume bulkhead-e1_workspace", "rm-volume bulkhead-e1_home",
 		"rm-volume bulkhead-e1_nix", "rm-volume bulkhead-e1_hostkeys",
+		"rm-volume bulkhead-e1_github", "rm-volume bulkhead-e1_tokens",
 		"rm-network bulkhead-e1")
 }
 

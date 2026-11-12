@@ -5,6 +5,7 @@ package enginetest
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -29,13 +30,40 @@ type Fake struct {
 	// Clock is the time of the last start; every start advances it a second.
 	Clock time.Time
 
+	// Created keeps what each container was created from, by name.
+	Created map[string]Spec
+	// Output is what Logs and Exec write, by container name.
+	Output map[string]string
+	// ExecExit is the exit status Exec reports.
+	ExecExit int
+	// Execs are the commands Exec was asked to run.
+	Execs []engine.ExecSpec
+	// Devices are the CDI devices the engine reports; nil means it does not
+	// report devices at all.
+	Devices []string
+	// DeviceGroups is the answer to the device probe.
+	DeviceGroups []int
+	// MissingImage says which images the engine does not have (nil: it has all).
+	MissingImage func(ref string) bool
+	// Tags are the names images were given.
+	Tags map[string]string
+
 	nextID      int
 	holderPolls int
 }
 
+// Spec is what a container was created from.
+type Spec struct {
+	Config *container.Config
+	Host   *container.HostConfig
+}
+
 // New returns an engine with no containers whose holder gets healthy at once.
 func New() *Fake {
-	return &Fake{Containers: map[string]*engine.Container{}, Volumes: map[string]bool{}, HealthAfterStart: []string{"healthy"}}
+	return &Fake{
+		Containers: map[string]*engine.Container{}, Volumes: map[string]bool{}, HealthAfterStart: []string{"healthy"},
+		Created: map[string]Spec{}, Output: map[string]string{}, Tags: map[string]string{},
+	}
 }
 
 func (f *Fake) log(format string, args ...any) {
@@ -78,8 +106,10 @@ func (f *Fake) AddLegacy(name string, running bool) {
 	}
 }
 
-// ImageExists says yes: tests never build.
-func (f *Fake) ImageExists(context.Context, string) (bool, error) { return true, nil }
+// ImageExists says yes unless MissingImage says the image is not there.
+func (f *Fake) ImageExists(_ context.Context, ref string) (bool, error) {
+	return f.MissingImage == nil || !f.MissingImage(ref), nil
+}
 
 func (f *Fake) EnsureNetwork(_ context.Context, name string, _ map[string]string) error {
 	f.log("network %s", name)
@@ -128,6 +158,7 @@ func (f *Fake) CreateContainer(_ context.Context, name string, config *container
 		NetworkMode: string(host.NetworkMode),
 		Labels:      config.Labels,
 	}
+	f.Created[name] = Spec{Config: config, Host: host}
 	f.log("create %s", name)
 	return id, nil
 }
@@ -182,9 +213,45 @@ func (f *Fake) LogsTail(context.Context, string, int) (string, error) {
 func (f *Fake) Lifecycle() []string {
 	var out []string
 	for _, call := range f.Calls {
-		if !strings.HasPrefix(call, "network ") && !strings.HasPrefix(call, "volume ") && call != "probe-socket" {
+		if !strings.HasPrefix(call, "network ") && !strings.HasPrefix(call, "volume ") && !strings.HasPrefix(call, "probe-") {
 			out = append(out, call)
 		}
 	}
 	return out
+}
+
+// Logs writes the container's scripted output.
+func (f *Fake) Logs(_ context.Context, id string, opts engine.LogOptions, out io.Writer) error {
+	name := f.nameOf(id)
+	f.log("logs %s follow=%v tail=%d", name, opts.Follow, opts.Tail)
+	_, err := io.WriteString(out, f.Output[name])
+	return err
+}
+
+// Exec records the command and plays the container's scripted output.
+func (f *Fake) Exec(_ context.Context, id string, spec engine.ExecSpec, streams engine.Streams) (int, error) {
+	name := f.nameOf(id)
+	f.log("exec %s %s", name, strings.Join(spec.Cmd, " "))
+	f.Execs = append(f.Execs, spec)
+	if streams.Out != nil {
+		io.WriteString(streams.Out, f.Output[name])
+	}
+	return f.ExecExit, nil
+}
+
+// TagImage records the new name.
+func (f *Fake) TagImage(_ context.Context, source, target string) error {
+	f.Tags[target] = source
+	return nil
+}
+
+// CDIDevices reports Devices.
+func (f *Fake) CDIDevices(context.Context) ([]string, bool, error) {
+	return f.Devices, f.Devices != nil, nil
+}
+
+// DeviceGIDs answers the device probe.
+func (f *Fake) DeviceGIDs(_ context.Context, _ string, devices []string) ([]int, error) {
+	f.log("probe-devices %s", strings.Join(devices, ","))
+	return f.DeviceGroups, nil
 }

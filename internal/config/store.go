@@ -81,6 +81,10 @@ func (s Store) MachineKey() string { return filepath.Join(s.Dir, "id_ed25519") }
 // KeyRegistry is the file of registered public keys.
 func (s Store) KeyRegistry() string { return filepath.Join(s.Dir, "keys.json") }
 
+// InitScript is the init script shared by all environments: it runs once in
+// a fresh home volume. The file is the user's to edit.
+func (s Store) InitScript() string { return filepath.Join(s.Dir, "init.sh") }
+
 // ErrLegacy means the directory holds environments but no bulkhead.json: it
 // belongs to the TypeScript version and has not been migrated.
 var ErrLegacy = errors.New("this configuration directory belongs to the TypeScript version of bulkhead")

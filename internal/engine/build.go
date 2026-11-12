@@ -16,8 +16,8 @@ import (
 // ResolveEndpoint does, so both talk to the same daemon.
 type CLIBuilder struct{}
 
-func (CLIBuilder) Build(ctx context.Context, ref string, src image.Source, progress io.Writer) error {
-	cmd := exec.CommandContext(ctx, "docker", "build", "--tag", ref, "-")
+func (CLIBuilder) Build(ctx context.Context, ref string, src image.Source, opts image.Options, progress io.Writer) error {
+	cmd := exec.CommandContext(ctx, "docker", BuildArgs(ref, src, opts)...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -33,4 +33,20 @@ func (CLIBuilder) Build(ctx context.Context, ref string, src image.Source, progr
 		return fmt.Errorf("docker build %s: %w", ref, err)
 	}
 	return writeErr
+}
+
+// BuildArgs are the arguments of the docker CLI for a build whose context
+// comes on stdin.
+func BuildArgs(ref string, src image.Source, opts image.Options) []string {
+	args := []string{"build", "--tag", ref}
+	if src.Dockerfile != "" {
+		args = append(args, "--file", src.Dockerfile)
+	}
+	if opts.Pull {
+		args = append(args, "--pull")
+	}
+	if opts.NoCache {
+		args = append(args, "--no-cache")
+	}
+	return append(args, "-")
 }

@@ -106,7 +106,7 @@ func (r Runner) prepare(ctx context.Context, env plan.Env, target plan.Target) e
 	if err := eng.EnsureNetwork(ctx, plan.Network(env.ID), plan.Labels(target.Owner, env.ID, "network")); err != nil {
 		return fmt.Errorf("preparing the network: %w", err)
 	}
-	for _, key := range plan.VolumeKeys {
+	for _, key := range plan.AllVolumeKeys() {
 		if err := eng.EnsureVolume(ctx, plan.Volume(env.ID, key), plan.Labels(target.Owner, env.ID, key)); err != nil {
 			return fmt.Errorf("preparing the %s volume: %w", key, err)
 		}

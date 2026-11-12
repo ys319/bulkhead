@@ -53,6 +53,8 @@ func TestDevMountsOnlyItsOwnVolumes(t *testing.T) {
 		"bulkhead-3f9a2c1e7b04_workspace": "/home/developer/workspace",
 		"bulkhead-3f9a2c1e7b04_nix":       "/nix",
 		"bulkhead-3f9a2c1e7b04_hostkeys":  "/etc/bulkhead/hostkeys",
+		"bulkhead-3f9a2c1e7b04_github":    "/etc/bulkhead/github",
+		"bulkhead-3f9a2c1e7b04_tokens":    "/etc/bulkhead/tokens",
 	}
 	if len(dev.Host.Mounts) != len(want) {
 		t.Fatalf("mounts = %+v", dev.Host.Mounts)
@@ -63,6 +65,12 @@ func TestDevMountsOnlyItsOwnVolumes(t *testing.T) {
 		}
 		if want[m.Source] != m.Target {
 			t.Errorf("unexpected mount %s -> %s", m.Source, m.Target)
+		}
+		// What the host hands in is read-only inside: the environment cannot
+		// change what bh wrote (the direction is host to guest only).
+		injected := strings.HasPrefix(m.Target, "/etc/bulkhead/") && m.Target != "/etc/bulkhead/hostkeys"
+		if m.ReadOnly != injected {
+			t.Errorf("%s: read-only = %v", m.Target, m.ReadOnly)
 		}
 	}
 }
@@ -246,5 +254,67 @@ func TestDockerSocketIsOptIn(t *testing.T) {
 	// Turning it on (or a different group) recreates dev.
 	if dev.Config.Labels[LabelSpec] == plain.Config.Labels[LabelSpec] {
 		t.Error("the opt-in did not change dev's spec")
+	}
+}
+
+func TestInitScriptIsTheOnlyHostFileAndReadOnly(t *testing.T) {
+	env := testEnv
+	env.InitScript = "/home/me/.config/bh/init.sh"
+	dev := Dev(env, testTarget, "h")
+	var binds []mount.Mount
+	for _, m := range dev.Host.Mounts {
+		if m.Type != mount.TypeVolume {
+			binds = append(binds, m)
+		}
+	}
+	if len(binds) != 1 || binds[0].Type != mount.TypeBind || binds[0].Source != env.InitScript ||
+		binds[0].Target != InitScriptTarget || !binds[0].ReadOnly {
+		t.Errorf("binds = %+v", binds)
+	}
+	if len(dev.Host.Binds) != 0 {
+		t.Errorf("Binds = %v (a bind given this way makes a directory when the file is missing)", dev.Host.Binds)
+	}
+}
+
+func TestGPUAddsDevicesAndNothingElse(t *testing.T) {
+	base := Env{ID: "e1", Name: "main", SSHPort: 22001, Restart: "no", GPU: "off"}
+	target := Target{Owner: "cfg", HolderImage: "holder:1", DevImage: "dev:1"}
+	plain := Dev(base, target, "h")
+	if len(plain.Host.DeviceRequests) != 0 {
+		t.Errorf("gpu off: %+v", plain.Host.DeviceRequests)
+	}
+
+	legacy := base
+	legacy.GPU = "legacy"
+	got := Dev(legacy, target, "h").Host
+	if len(got.DeviceRequests) != 1 || got.DeviceRequests[0].Count != -1 || got.DeviceRequests[0].Driver != "" ||
+		!slices.Equal(got.DeviceRequests[0].Capabilities[0], []string{"gpu"}) {
+		t.Errorf("legacy: %+v", got.DeviceRequests)
+	}
+
+	cdi := base
+	cdi.GPU, cdi.CDIDevices, cdi.DeviceGIDs = "cdi", []string{"nvidia.com/gpu=0"}, []int{44, 44, 110}
+	cdi.DockerSocket, cdi.SocketGID = true, 110
+	got = Dev(cdi, target, "h").Host
+	if len(got.DeviceRequests) != 1 || got.DeviceRequests[0].Driver != "cdi" ||
+		!slices.Equal(got.DeviceRequests[0].DeviceIDs, []string{"nvidia.com/gpu=0"}) {
+		t.Errorf("cdi: %+v", got.DeviceRequests)
+	}
+	if !slices.Equal(got.GroupAdd, []string{"44", "110"}) {
+		t.Errorf("GroupAdd = %v, want the device groups and the socket's, once each", got.GroupAdd)
+	}
+	// A device is not a capability: dev still has none, and is not privileged.
+	if got.Privileged || len(got.CapAdd) != 0 || got.CapDrop[0] != "ALL" {
+		t.Errorf("the GPU loosened more than the devices: %+v", got)
+	}
+	// The holder never gets a device.
+	if len(Holder(cdi, target).Host.DeviceRequests) != 0 {
+		t.Error("the holder got a device")
+	}
+	// Device groups of a setting that is not cdi are ignored.
+	off := base
+	off.DeviceGIDs = []int{44}
+	if len(Dev(off, target, "h").Host.GroupAdd) != 0 {
+		t.Error("device groups were added without gpu: cdi")
 	}
 }

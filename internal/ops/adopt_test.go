@@ -204,7 +204,7 @@ func TestReleaseKeepsTheVolumes(t *testing.T) {
 		"stop "+devName, "stop "+holderName,
 		"remove "+devName, "remove "+holderName,
 		"rm-network bulkhead-e1")
-	if len(before) != 4 {
+	if len(before) != 6 {
 		t.Fatalf("volumes before: %v", before)
 	}
 	volumesUntouched(t, f, before)
