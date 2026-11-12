@@ -33,12 +33,19 @@ type bench struct {
 	sshExit int
 	dialErr error
 	stdin   string
-	legacy  string // the TypeScript version's directory
+	legacy  string          // the TypeScript version's directory
+	home    string          // where ~/.ssh is
+	tools   []string        // programs of the host that were run, with their arguments
+	path    map[string]bool // programs in PATH
+	typing  bool            // stdin is a terminal
 }
 
 func newBench(t *testing.T) *bench {
 	root := t.TempDir()
-	return &bench{t: t, dir: filepath.Join(root, "bh"), legacy: filepath.Join(root, "bulkhead"), engine: enginetest.New()}
+	return &bench{
+		t: t, dir: filepath.Join(root, "bh"), legacy: filepath.Join(root, "bulkhead"), home: filepath.Join(root, "home"),
+		engine: enginetest.New(), path: map[string]bool{"code": true},
+	}
 }
 
 // run runs one bh command and returns its exit code and output.
@@ -53,6 +60,8 @@ func (b *bench) run(args ...string) (code int, stdout, stderr string) {
 				return b.dir
 			case "BULKHEAD_CONFIG_DIR":
 				return b.legacy
+			case "HOME":
+				return b.home
 			}
 			return ""
 		},
@@ -65,6 +74,17 @@ func (b *bench) run(args ...string) (code int, stdout, stderr string) {
 			return b.sshExit, nil
 		},
 		builder: noBuild{b.t},
+		tool: func(name string, args []string) (string, error) {
+			b.tools = append(b.tools, name+" "+strings.Join(args, " "))
+			return "", nil
+		},
+		lookPath: func(name string) (string, error) {
+			if b.path[name] {
+				return "/usr/bin/" + name, nil
+			}
+			return "", errors.New("not found")
+		},
+		isTerminal: func() bool { return b.typing },
 	}
 	code = a.run(context.Background(), args)
 	return code, out.String(), errOut.String()

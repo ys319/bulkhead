@@ -29,6 +29,7 @@ func main() {
 		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
 		getenv: os.Getenv, goos: runtime.GOOS,
 		dial: dialEngine, ssh: systemSSH, builder: engine.CLIBuilder{},
+		tool: runTool, lookPath: exec.LookPath, isTerminal: stdinIsTerminal,
 	}
 	os.Exit(a.run(ctx, os.Args[1:]))
 }
@@ -54,6 +55,12 @@ type app struct {
 	// ssh runs the ssh client on the terminal and returns its exit code.
 	ssh     func(args []string) (int, error)
 	builder image.Builder
+	// tool runs a program of the host (code, ssh-keygen) and returns its output.
+	tool func(name string, args []string) (string, error)
+	// lookPath finds a program in PATH.
+	lookPath func(name string) (string, error)
+	// isTerminal: stdin is somebody typing.
+	isTerminal func() bool
 }
 
 // usageError is a wrong invocation: exit code 2, no "bh:" prefix games.
@@ -73,14 +80,25 @@ func (e exitCode) Error() string { return fmt.Sprintf("exit status %d", int(e)) 
 
 const usageText = `usage: bh <command> [arguments]
 
-  create <name> [--port N] [--publish] [--restart unless-stopped|no]
-                      define a new environment (start it with up)
+  create <name> [--from <env>] [--port N] [--publish] [--restart unless-stopped|no]
+                      define a new environment (start it with up); --from
+                      copies the settings and dev.Dockerfile of another one
+  configure <env> [flags]
+                      change settings (bh configure for the flags)
+  rename <env> <new-name>
   up <env>            start the environment, creating what is missing
-  down <env>          stop it; containers and data stay
+  down <env> | --all  stop it; containers and data stay
   restart <env>       stop, recreate both containers, start
   list                all environments and their state
   status <env>        one environment in detail
   ssh <env> [command] open a shell in the environment, or run a command
+  open <env>          open it in VS Code
+  key show | list | add | rename | remove | attach | detach
+                      this machine's key, and other keys that may log in
+                      (bh key for details)
+  remote add | configure | remove
+                      environments that run on another machine
+                      (bh remote for details)
   path [<env>]        print the configuration directory (of an environment)
   destroy <env> [--yes]
                       remove the environment and its data
@@ -96,17 +114,22 @@ func (a *app) run(ctx context.Context, args []string) int {
 		return 2
 	}
 	commands := map[string]func(context.Context, []string) error{
-		"create":  a.create,
-		"up":      a.up,
-		"down":    a.down,
-		"restart": a.restart,
-		"list":    a.list,
-		"status":  a.status,
-		"ssh":     a.sshInto,
-		"path":    a.path,
-		"destroy": a.destroy,
-		"migrate": a.migrate,
-		"version": a.version,
+		"create":    a.create,
+		"configure": a.configure,
+		"rename":    a.rename,
+		"up":        a.up,
+		"down":      a.down,
+		"restart":   a.restart,
+		"list":      a.list,
+		"status":    a.status,
+		"ssh":       a.sshInto,
+		"open":      a.open,
+		"key":       a.key,
+		"remote":    a.remote,
+		"path":      a.path,
+		"destroy":   a.destroy,
+		"migrate":   a.migrate,
+		"version":   a.version,
 	}
 	name := args[0]
 	switch name {

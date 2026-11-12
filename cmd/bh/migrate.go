@@ -311,6 +311,7 @@ func (a *app) migrateOne(ctx context.Context, legacy config.LegacyStore, store c
 	if err := legacy.Retire(name); err != nil {
 		return fmt.Errorf("bh has taken %q over, but moving its old settings away failed: %w\n(run bh migrate %s again; until then do not start it with the TypeScript version)", name, err, name)
 	}
+	a.syncSSH(store)
 
 	fmt.Fprintf(out, "Migrated %q\n", name)
 	switch {
@@ -445,6 +446,7 @@ func (a *app) migrateUndo(ctx context.Context, legacy config.LegacyStore, store 
 	if err := store.RemoveEnvironment(id); err != nil {
 		return err
 	}
+	a.syncSSH(store)
 	fmt.Fprintf(out, "Handed %q back\n", name)
 	if env.Local() {
 		fmt.Fprintf(out, "  start it with the TypeScript version's bh (bh up %s there).\n", id)

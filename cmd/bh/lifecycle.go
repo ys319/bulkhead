@@ -16,7 +16,6 @@ import (
 	"github.com/ys319/bulkhead/internal/image"
 	"github.com/ys319/bulkhead/internal/ops"
 	"github.com/ys319/bulkhead/internal/plan"
-	"github.com/ys319/bulkhead/internal/sshkey"
 )
 
 // parseFlags parses flags wherever they stand among the arguments
@@ -45,59 +44,95 @@ func oneEnv(command string, args []string) (string, error) {
 	return args[0], nil
 }
 
+// newLocal defines a local environment. With from, the settings and the
+// dev.Dockerfile of that environment are copied; its data is not — the new
+// one starts from fresh volumes, and its init.sh runs as for any new one.
+// The keys come along because they are references into the registry.
+func (a *app) newLocal(name, from string, edit func(*config.Environment)) (config.Store, config.Environment, error) {
+	store, cfg, err := a.load()
+	if err != nil {
+		return store, config.Environment{}, err
+	}
+	if err := config.ValidateName(name); err != nil {
+		return store, config.Environment{}, usagef("%q: %v", name, err)
+	}
+	id, err := newEnvID(store)
+	if err != nil {
+		return store, config.Environment{}, err
+	}
+	env := config.NewLocal(id, name, cfg.SuggestPort())
+	var source *config.Environment
+	if from != "" {
+		found, err := cfg.Find(from)
+		if err != nil {
+			return store, env, err
+		}
+		if !found.Local() {
+			return store, env, fmt.Errorf("%q is a remote environment (only local settings can be copied)", found.Name)
+		}
+		source = &found
+		env = found
+		env.ID, env.Name, env.SSHPort = id, name, cfg.SuggestPort()
+	}
+	if edit != nil {
+		edit(&env)
+	}
+	if err := cfg.Check(env); err != nil {
+		return store, env, err
+	}
+	if _, err := store.Init(); err != nil {
+		return store, env, err
+	}
+	if err := store.SaveEnvironment(env); err != nil {
+		return store, env, err
+	}
+	if source != nil {
+		dockerfile, err := os.ReadFile(store.DevDockerfile(source.ID))
+		if err == nil {
+			err = os.WriteFile(store.DevDockerfile(id), dockerfile, 0o644)
+		}
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return store, env, fmt.Errorf("copying dev.Dockerfile from %q: %w", source.Name, err)
+		}
+	}
+	a.syncSSH(store)
+	return store, env, nil
+}
+
 func (a *app) create(_ context.Context, args []string) error {
 	flags := flag.NewFlagSet("create", flag.ContinueOnError)
 	port := flags.Int("port", 0, "")
 	publish := flags.Bool("publish", false, "")
-	restart := flags.String("restart", "unless-stopped", "")
+	restart := flags.String("restart", "", "")
+	from := flags.String("from", "", "")
 	rest, err := parseFlags(flags, args)
 	if err != nil {
 		return err
 	}
 	if len(rest) != 1 {
-		return usagef("usage: bh create <name> [--port N] [--publish] [--restart unless-stopped|no]")
+		return usagef("usage: bh create <name> [--from <env>] [--port N] [--publish] [--restart unless-stopped|no]")
 	}
-	name := rest[0]
-	if err := config.ValidateName(name); err != nil {
-		return usagef("%q: %v", name, err)
-	}
-
-	store, err := a.store()
-	if err != nil {
-		return err
-	}
-	cfg, err := store.Load()
-	if err != nil {
-		return err
-	}
-	for _, env := range cfg.Envs {
-		if env.Name == name {
-			return fmt.Errorf("an environment named %q already exists", name)
+	store, env, err := a.newLocal(rest[0], *from, func(env *config.Environment) {
+		if *port != 0 {
+			env.SSHPort = *port
 		}
-		if *port != 0 && env.Local() && env.SSHPort == *port {
-			return fmt.Errorf("port %d is already the ssh port of %q", *port, env.Name)
+		if *publish {
+			env.Publish = true
 		}
-	}
-	if *port == 0 {
-		*port = cfg.SuggestPort()
-	}
-
-	id, err := newEnvID(store)
+		if *restart != "" {
+			env.Restart = *restart
+		}
+	})
 	if err != nil {
 		return err
 	}
-	env := config.NewLocal(id, name, *port)
-	env.Publish, env.Restart = *publish, *restart
-	if _, err := store.Init(); err != nil {
-		return err
-	}
-	if err := store.SaveEnvironment(env); err != nil {
-		return err
-	}
 
-	fmt.Fprintf(a.stdout, "Created environment %q (id %s)\n", name, id)
-	fmt.Fprintf(a.stdout, "  settings: %s\n", store.EnvFile(id))
-	fmt.Fprintf(a.stdout, "  ssh:      %s (start it with bh up %s)\n", sshAddress(env), name)
+	fmt.Fprintf(a.stdout, "Created environment %q (id %s)\n", env.Name, env.ID)
+	fmt.Fprintf(a.stdout, "  settings: %s\n", store.EnvFile(env.ID))
+	fmt.Fprintf(a.stdout, "  ssh:      %s (start it with bh up %s)\n", sshAddress(env), env.Name)
+	if env.DockerSocket {
+		fmt.Fprintf(a.stderr, "bh: warning: %s: %s\n", env.Name, socketWarning)
+	}
 	return nil
 }
 
@@ -152,9 +187,9 @@ func containersFor(store config.Store, env config.Environment) (plan.Env, plan.T
 	if err != nil {
 		return plan.Env{}, plan.Target{}, err
 	}
-	machineKey, err := sshkey.EnsureMachineKey(store.MachineKey(), "bulkhead")
+	machineKey, err := ensureMachineKey(store)
 	if err != nil {
-		return plan.Env{}, plan.Target{}, fmt.Errorf("preparing the machine's ssh key: %w", err)
+		return plan.Env{}, plan.Target{}, err
 	}
 	registry, err := store.LoadKeys()
 	if err != nil {
@@ -227,14 +262,18 @@ func (a *app) start(ctx context.Context, command string, args []string,
 	if err := run(ops.Runner{Engine: eng}, ctx, planned, target); err != nil {
 		return err
 	}
+	a.syncSSH(store)
 	fmt.Fprintf(a.stdout, "%s is up — ssh: %s (bh ssh %s)\n", env.Name, sshAddress(env), env.Name)
 	return nil
 }
 
 func (a *app) down(ctx context.Context, args []string) error {
+	if len(args) == 1 && args[0] == "--all" {
+		return a.downAll(ctx)
+	}
 	ref, err := oneEnv("down", args)
 	if err != nil {
-		return err
+		return usagef("usage: bh down <env> | --all")
 	}
 	_, env, err := a.localEnv("down", ref)
 	if err != nil {
@@ -249,6 +288,63 @@ func (a *app) down(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Fprintf(a.stdout, "%s is stopped (containers and data are kept)\n", env.Name)
+	return nil
+}
+
+// downAll stops every local environment that has a running container —
+// broken ones included: their settings cannot be read, their containers
+// can be stopped.
+func (a *app) downAll(ctx context.Context) error {
+	_, cfg, err := a.load()
+	if err != nil {
+		return err
+	}
+	type target struct{ id, name string }
+	var targets []target
+	for _, env := range cfg.Envs {
+		if env.Local() {
+			targets = append(targets, target{env.ID, env.Name})
+		}
+	}
+	for _, broken := range cfg.Broken {
+		if config.ValidID(broken.ID) {
+			targets = append(targets, target{broken.ID, broken.ID})
+		}
+	}
+	if len(targets) == 0 {
+		fmt.Fprintln(a.stdout, "No local environments")
+		return nil
+	}
+	eng, disconnect, err := a.dial(a.getenv)
+	if err != nil {
+		return err
+	}
+	defer disconnect()
+	runner := ops.Runner{Engine: eng}
+
+	stopped, failed := 0, 0
+	for _, target := range targets {
+		status, err := runner.Inspect(ctx, target.id)
+		if err == nil && !active(status) {
+			continue
+		}
+		if err == nil {
+			err = runner.Down(ctx, target.id)
+		}
+		if err != nil {
+			failed++
+			fmt.Fprintf(a.stderr, "bh: %s: %v\n", target.name, err)
+			continue
+		}
+		stopped++
+		fmt.Fprintf(a.stdout, "%s is stopped\n", target.name)
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d environment(s) could not be stopped", failed)
+	}
+	if stopped == 0 {
+		fmt.Fprintln(a.stdout, "Nothing was running")
+	}
 	return nil
 }
 
@@ -274,9 +370,9 @@ func (a *app) destroy(ctx context.Context, args []string) error {
 	}
 	// A broken environment can still be destroyed, by its id: its settings
 	// are unreadable, its resources are not.
-	id, name, local := "", ref, true
+	id, name, local, port := "", ref, true, 0
 	if env, err := cfg.Find(ref); err == nil {
-		id, name, local = env.ID, env.Name, env.Local()
+		id, name, local, port = env.ID, env.Name, env.Local(), env.SSHPort
 	} else {
 		for _, broken := range cfg.Broken {
 			if broken.ID == ref {
@@ -314,6 +410,10 @@ func (a *app) destroy(ctx context.Context, args []string) error {
 	if err := store.RemoveEnvironment(id); err != nil {
 		return err
 	}
+	if local && port != 0 {
+		a.forgetHostKey(port)
+	}
+	a.syncSSH(store)
 	fmt.Fprintf(a.stdout, "Destroyed %q\n", name)
 	return nil
 }
