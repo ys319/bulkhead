@@ -1,0 +1,17 @@
+# sshd runs as the login user itself (not root) so the dev container can keep
+# cap_drop: [ALL] — a non-root sshd can only ever authenticate its own user.
+# DECIDED: docs/decisions/0007-no-sudo-in-container.md
+# Port 22 works without privileges: Docker defaults the container netns to
+# ip_unprivileged_port_start=0 (pinned explicitly on the holder — ADR 0016).
+Port 22
+ListenAddress 0.0.0.0
+HostKey /etc/bulkhead/hostkeys/ssh_host_ed25519_key
+PidFile none
+UsePAM no
+PermitRootLogin no
+AllowUsers developer
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AuthorizedKeysFile /home/developer/.ssh/authorized_keys
+Subsystem sftp internal-sftp

@@ -1,0 +1,12 @@
+# Scripts here run inside Linux containers. A Windows checkout with the default
+# core.autocrlf=true would rewrite them to CRLF, and the container then fails
+# with "exec /usr/local/bin/firewall.sh: no such file or directory" — the file
+# is there, the CR on the shebang line is not (verified 2026-07-27).
+#
+# Everything under containers/ ends up inside an image, so fix the whole tree
+# rather than listing names — files without an extension (bh-guest) slipped
+# through the old per-name list (review 2026-11-06 F-02). If a binary file is
+# ever added there, mark it with its own "-text" line below this one.
+containers/** text eol=lf
+*.sh text eol=lf
+*.yaml text eol=lf

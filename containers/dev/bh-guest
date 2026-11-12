@@ -1,0 +1,339 @@
+#!/bin/sh
+# bh-guest — bulkhead's in-container helper. Everything the management tool
+# does inside the dev container goes through here — DECIDED:
+# docs/decisions/0035-bh-guest.md
+#
+# Ground rules (ADR 0035): data flows host -> guest only (the host never
+# trusts this script's output), no privileges, no network, and nothing beyond
+# what the base image ships (POSIX sh + coreutils). Host-written metadata is
+# key=value so no JSON parser is needed.
+#
+# BULKHEAD_GUEST_ROOT prefixes every absolute path — tests point it at a
+# temporary directory; inside the container it is unset.
+set -eu
+
+VERSION=2
+ROOT="${BULKHEAD_GUEST_ROOT:-}"
+GITHUB_DIR="$ROOT/etc/bulkhead/github"
+TOKENS_DIR="$ROOT/etc/bulkhead/tokens"
+INIT_SCRIPT="$ROOT/etc/bulkhead/init.sh"
+INIT_MARKER="${HOME:-/home/developer}/.config/bulkhead/initialized"
+DOCKER_SOCKET="$ROOT/var/run/docker.sock"
+
+# Exit status for unknown subcommands / bad arguments. The host maps it (and
+# 127 = bh-guest missing) to "the image is older than bh — rebuild".
+EX_USAGE=64
+
+say() { printf 'bh-guest: %s\n' "$*" >&2; }
+
+usage() {
+  cat <<'EOF'
+Usage: bh-guest <command> [args]
+
+  init [--once]      Run init.sh (--once: skip when it already completed on
+                     this home volume — the entrypoint's first-boot path)
+  git-helper <op>    git credential helper (git appends get / store / erase)
+  token <service>    Print the service's token, read-only (services: github)
+  env                Shell exports for /etc/zsh/zshenv (GH_TOKEN and the
+                     tokens set on the host)
+  status             What bulkhead injected into this environment
+  --version | help
+EOF
+}
+
+usage_error() {
+  usage >&2
+  exit "$EX_USAGE"
+}
+
+# ---- metadata (host-written key=value — ADR 0036) ----
+
+# meta_get <file> <key>: the first value for key, empty when absent.
+meta_get() {
+  [ -f "$1" ] || return 0
+  sed -n "s/^$2=//p" "$1" | head -n 1
+}
+
+now_epoch() { date +%s; }
+
+# token_read <service> [quiet]: print the token on stdout, or fail (status 1)
+# with the reason on stderr unless quiet. An expired token counts as absent so
+# that git falls through to the user's own helpers and gh to its own login.
+token_read() {
+  case "$1" in
+    github) dir="$GITHUB_DIR" ;;
+    *)
+      say "unknown token service: $1 (known: github)"
+      return "$EX_USAGE"
+      ;;
+  esac
+  quiet="${2:-}"
+  # The host writes the volume as uid 1000 / 0700 — another user cannot even
+  # see whether a token exists, so say that instead of "no token".
+  if [ -d "$dir" ] && [ ! -x "$dir" ]; then
+    [ -n "$quiet" ] || say "$1 token directory is not accessible to $(id -un) (it belongs to the dev user)"
+    return 1
+  fi
+  if [ ! -s "$dir/token" ]; then
+    [ -n "$quiet" ] || say "no $1 token (issue one on the host: bh github set <env> --preset ...)"
+    return 1
+  fi
+  if [ ! -r "$dir/token" ]; then
+    [ -n "$quiet" ] || say "$1 token is present but not readable by $(id -un)"
+    return 1
+  fi
+  token=$(tr -d '\r\n' < "$dir/token")
+  # The host validates the format; refuse anything else rather than pass
+  # unexpected bytes into git or a shell export.
+  case "$token" in
+    "" | *[!A-Za-z0-9_]*)
+      [ -n "$quiet" ] || say "$1 token file has an unexpected format"
+      return 1
+      ;;
+  esac
+  expires=$(meta_get "$dir/meta" expires_epoch)
+  if [ -n "$expires" ] && [ "$expires" -le "$(now_epoch)" ]; then
+    [ -n "$quiet" ] || say "$1 token expired on $(meta_get "$dir/meta" expires_date) (re-issue on the host: bh github set <env> --preset ...)"
+    return 1
+  fi
+  printf '%s\n' "$token"
+}
+
+# ---- other tokens (host-written NAME=value lines — ADR 0042) ----
+
+# token_line_problem <name> <value>: why the line must not be exported, or
+# nothing when it is fine. The host already validated both; this re-check only
+# keeps anything that could break out of the '...' quoting (or shadow the
+# GitHub route) from reaching a shell. Reserved names live on the host only.
+token_line_problem() {
+  case "$1" in
+    "" | [0-9_]*) echo "unexpected name"; return ;;
+    GH_TOKEN) echo "GH_TOKEN comes from the GitHub token"; return ;;
+  esac
+  if [ -n "$(printf '%s' "$1" | LC_ALL=C tr -d 'A-Z0-9_')" ]; then
+    echo "unexpected name"
+    return
+  fi
+  # Printable ASCII without the single quote (0x21-0x26, 0x28-0x7E).
+  if [ -z "$2" ] || [ -n "$(printf '%s' "$2" | LC_ALL=C tr -d '!-&(-~')" ]; then
+    echo "unexpected value"
+  fi
+}
+
+# tokens_each <callback>: call <callback> <name> <value> <problem> for each
+# line. The first = splits (values may contain =). A missing or unreadable
+# file means no tokens.
+tokens_each() {
+  [ -r "$TOKENS_DIR/env" ] || return 0
+  cr=$(printf '\r')
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%"$cr"}"
+    [ -n "$line" ] || continue
+    case "$line" in
+      *=*) name="${line%%=*}" value="${line#*=}" ;;
+      *) name="$line" value="" ;;
+    esac
+    "$1" "$name" "$value" "$(token_line_problem "$name" "$value")"
+  done < "$TOKENS_DIR/env"
+}
+
+# ---- init (ADR 0017 — the one implementation for first boot and init-run) ----
+
+cmd_init() {
+  once=""
+  case "${1:-}" in
+    "") ;;
+    --once) once=1 ;;
+    *) usage_error ;;
+  esac
+  [ $# -le 1 ] || usage_error
+  if [ ! -f "$INIT_SCRIPT" ]; then
+    # First boot without the mount is a hand-run container; nothing to do.
+    [ -n "$once" ] && return 0
+    say "$INIT_SCRIPT is not mounted"
+    return 1
+  fi
+  if [ -n "$once" ] && [ -f "$INIT_MARKER" ]; then
+    return 0
+  fi
+  say "running init.sh"
+  # init.sh is user-edited on the host; Windows editors save CRLF, which makes
+  # every line fail ("command not found: git\r") and, with the restart
+  # policy, traps the container in a boot loop. Strip trailing CRs into a copy
+  # (line ends only, like the repo's .gitattributes) — the mount is read-only.
+  tmp=$(mktemp)
+  sed 's/\r$//' "$INIT_SCRIPT" > "$tmp"
+  # zsh so ~/.zshenv applies (USER fix + nix on PATH — ADR 0009). The marker
+  # is written only on success, so the next start retries.
+  if ! zsh "$tmp"; then
+    rm -f "$tmp"
+    say "init.sh failed"
+    return 1
+  fi
+  rm -f "$tmp"
+  mkdir -p "$(dirname "$INIT_MARKER")"
+  chmod 700 "$(dirname "$INIT_MARKER")"
+  : > "$INIT_MARKER"
+  say "init.sh finished"
+}
+
+# ---- git credential helper (ADR 0036) ----
+
+cmd_git_helper() {
+  [ $# -eq 1 ] || usage_error
+  op="$1"
+  protocol=""
+  host=""
+  # git sends key=value lines terminated by a blank line (or EOF); read them
+  # all so git never sees a broken pipe.
+  while IFS= read -r line; do
+    [ -n "$line" ] || break
+    case "$line" in
+      protocol=*) protocol="${line#protocol=}" ;;
+      host=*) host="${line#host=}" ;;
+    esac
+  done
+  # Route by host. Only HTTPS — the token is useless over ssh remotes.
+  service=""
+  if [ "$protocol" = https ]; then
+    case "$host" in
+      github.com) service=github ;;
+    esac
+  fi
+  [ -n "$service" ] || return 0
+  case "$op" in
+    get)
+      token=$(token_read "$service") || return 0
+      printf 'username=x-access-token\npassword=%s\n' "$token"
+      ;;
+    erase)
+      # git calls erase when the server rejected the credential. Say what to
+      # do next — helper stderr reaches the user's terminal.
+      if token_read "$service" quiet > /dev/null; then
+        say "GitHub rejected the bulkhead token (expired, revoked, or this repository was not selected) — re-issue on the host: bh github set <env> --preset ..."
+      fi
+      ;;
+    *)
+      # store, and any action git adds later: the git credential protocol says
+      # helpers ignore actions they do not handle.
+      ;;
+  esac
+}
+
+# ---- token / env ----
+
+cmd_token() {
+  [ $# -eq 1 ] || usage_error
+  token_read "$1"
+}
+
+cmd_env() {
+  [ $# -eq 0 ] || usage_error
+  # Quiet: this runs for every zsh, including each `zsh -c` Claude Code starts.
+  if token=$(token_read github quiet); then
+    printf "export GH_TOKEN='%s'\n" "$token"
+  fi
+  tokens_each export_token
+}
+
+# Lines that fail the re-check are skipped silently here; status names them.
+export_token() {
+  [ -z "$3" ] || return 0
+  printf "export %s='%s'\n" "$1" "$2"
+}
+
+# ---- status ----
+
+github_status() {
+  meta="$GITHUB_DIR/meta"
+  if [ ! -s "$GITHUB_DIR/token" ]; then
+    echo "none — tokens are issued on the host (bh github set <env> --preset ...)"
+    return
+  fi
+  line="$(meta_get "$meta" preset)"
+  owner=$(meta_get "$meta" owner)
+  [ -z "$owner" ] || line="$line · owner: $owner"
+  repos=$(meta_get "$meta" repos)
+  [ -z "$repos" ] || line="$line · repos: $(printf '%s' "$repos" | sed 's/,/, /g')"
+  expires=$(meta_get "$meta" expires_epoch)
+  if [ -n "$expires" ]; then
+    left=$(( (expires - $(now_epoch)) / 86400 ))
+    date_text=$(meta_get "$meta" expires_date)
+    if [ "$expires" -le "$(now_epoch)" ]; then
+      line="$line · EXPIRED on $date_text (not used)"
+    else
+      line="$line · expires $date_text (in ${left}d)"
+    fi
+  else
+    line="$line · no expiry"
+  fi
+  if [ ! -r "$GITHUB_DIR/token" ]; then
+    line="$line · NOT READABLE by $(id -un)"
+  fi
+  echo "$line"
+  echo "         used by git over https://github.com and gh (GH_TOKEN)"
+  # git hands every successful credential to each helper's `store` — a
+  # persisting helper copies the token into the home volume (and from there
+  # into backups / exports). This script cannot stop that; it can only say so.
+  if command -v git > /dev/null 2>&1 && {
+    git config --get-all credential.helper 2> /dev/null | grep -q '^store' ||
+      git config --get-all credential.https://github.com.helper 2> /dev/null | grep -q '^store'
+  }; then
+    echo "         WARNING: git credential.helper 'store' saves this token into ~/.git-credentials"
+  fi
+}
+
+tokens_status() {
+  if [ -d "$TOKENS_DIR" ] && [ ! -x "$TOKENS_DIR" ]; then
+    echo "not accessible to $(id -un) (they belong to the dev user)"
+    return
+  fi
+  names=""
+  skipped=""
+  collect_token() {
+    if [ -z "$3" ]; then
+      names="${names:+$names, }$1"
+    else
+      skipped="${skipped:+$skipped, }$1 ($3)"
+    fi
+  }
+  tokens_each collect_token
+  if [ -z "$names" ] && [ -z "$skipped" ]; then
+    echo "none — set on the host (bh token set <env> ...)"
+    return
+  fi
+  [ -z "$names" ] || echo "$names (exported to new shells)"
+  [ -z "$skipped" ] || echo "         skipped: $skipped"
+}
+
+cmd_status() {
+  [ $# -eq 0 ] || usage_error
+  if [ -f "$INIT_MARKER" ]; then
+    echo "init:    done"
+  else
+    echo "init:    not completed on this home volume (bh-guest init)"
+  fi
+  echo "github:  $(github_status)"
+  echo "tokens:  $(tokens_status)"
+  if [ -S "$DOCKER_SOCKET" ]; then
+    echo "docker:  host Docker socket mounted — processes here can control the host's Docker (not isolated)"
+  else
+    echo "docker:  no host socket"
+  fi
+}
+
+# ---- dispatch ----
+
+[ $# -gt 0 ] || usage_error
+command="$1"
+shift
+case "$command" in
+  init) cmd_init "$@" ;;
+  git-helper) cmd_git_helper "$@" ;;
+  token) cmd_token "$@" ;;
+  env) cmd_env "$@" ;;
+  status) cmd_status "$@" ;;
+  --version) echo "bh-guest $VERSION" ;;
+  help | -h | --help) usage ;;
+  *) usage_error ;;
+esac

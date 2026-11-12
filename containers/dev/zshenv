@@ -1,0 +1,12 @@
+# Nix (single-user) environment. This lives in .zshenv — not .zshrc — so that
+# non-interactive commands (`ssh <host> nix ...`, VS Code tasks) get nix on
+# PATH too. Interactive customisation belongs in ~/.zshrc.local (grml).
+#
+# nix.sh silently no-ops when $USER is unset, and plain `docker exec` as the
+# dev user (the path the management tool and verify.sh use) does not set it —
+# so fill it in first. The root admin console (ADR 0007) is unaffected: it has
+# its own shell/HOME and does not need nix.
+export USER="${USER:-$(id -un)}"
+if [ -e "$HOME/.nix-profile/etc/profile.d/nix.sh" ]; then
+  . "$HOME/.nix-profile/etc/profile.d/nix.sh"
+fi
