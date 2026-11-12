@@ -480,8 +480,9 @@ func (m *Model) remoteMenu(id, name string) *menu {
 						if err != nil {
 							return nil, errors.New("expected host:port, for example studio.test:22001")
 						}
+						// What was known about reaching the old address says nothing now.
+						delete(m.reach, id)
 						return m.do("Saving", fmt.Sprintf("%q is now reached at %s:%d", env.Name, address.Host, address.Port), false, func(io.Writer) error {
-							delete(m.reach, id)
 							return m.backend.ConfigureRemote(env.Name, &address.Host, &address.Port)
 						}), nil
 					}})
@@ -587,8 +588,10 @@ func (m *Model) keyEnvironments(fingerprint string) *menu {
 		return append(items, separator, item{label: "Save and close", color: green, run: func(m *Model) tea.Cmd {
 			before := m.usersOf(fingerprint)
 			running := false
+			// The work runs beside the interface: it gets its own copy of the list.
+			envs := slices.Clone(m.snap.Envs)
 			return m.doThen("Saving", false, func(io.Writer) (string, string, error) {
-				for _, state := range m.snap.Envs {
+				for _, state := range envs {
 					name := state.Env.Name
 					was, now := slices.Contains(before, name), slices.Contains(chosen, name)
 					var err error

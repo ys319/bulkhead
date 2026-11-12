@@ -473,3 +473,35 @@ func (a *app) reset(ctx context.Context, args []string) error {
 	fmt.Fprintf(a.stdout, "The next bh up %s starts from the image again and runs init.sh\n", env.Name)
 	return nil
 }
+
+// pickable are the commands that ask which environment when none is named
+// (at a terminal), and whether they are for local environments only.
+var pickable = map[string]bool{
+	"up": true, "down": true, "restart": true, "logs": true,
+	"status": false, "ssh": false, "open": false,
+}
+
+// askWhich lets the user choose the environment a command was not given.
+func (a *app) askWhich(ctx context.Context, command string, localOnly bool) (string, error) {
+	_, cfg, err := a.load()
+	if err != nil {
+		return "", err
+	}
+	var choices []tui.Choice
+	for _, env := range cfg.Envs {
+		switch {
+		case env.Local():
+			choices = append(choices, tui.Choice{Name: env.Name, Note: sshAddress(env)})
+		case !localOnly:
+			choices = append(choices, tui.Choice{Name: env.Name, Note: "remote, " + sshAddress(env)})
+		}
+	}
+	if len(choices) == 0 {
+		return "", usagef("usage: bh %s <env> (there is no environment to choose from yet)", command)
+	}
+	name, err := a.pick(ctx, "bh "+command+" — which environment?", choices)
+	if errors.Is(err, tui.ErrNothingPicked) {
+		return "", exitCode(1)
+	}
+	return name, err
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/ys319/bulkhead/internal/engine"
 	"github.com/ys319/bulkhead/internal/image"
 	"github.com/ys319/bulkhead/internal/ops"
+	"github.com/ys319/bulkhead/internal/tui"
 )
 
 // version is set at release time with -ldflags "-X main.version=...".
@@ -29,7 +30,7 @@ func main() {
 		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
 		getenv: os.Getenv, goos: runtime.GOOS,
 		dial: dialEngine, ssh: systemSSH, builder: engine.CLIBuilder{},
-		tool: runTool, lookPath: exec.LookPath, isTerminal: stdinIsTerminal, rawTerminal: rawTerminal,
+		tool: runTool, lookPath: exec.LookPath, isTerminal: stdinIsTerminal, rawTerminal: rawTerminal, pick: tui.Pick,
 	}
 	os.Exit(a.run(ctx, os.Args[1:]))
 }
@@ -71,6 +72,8 @@ type app struct {
 	// go through unprocessed until restore is called. size reports the
 	// terminal's size.
 	rawTerminal func() (restore func(), size func() (height, width uint), err error)
+	// pick asks the user to choose from a list.
+	pick func(ctx context.Context, title string, choices []tui.Choice) (string, error)
 }
 
 // usageError is a wrong invocation: exit code 2, no "bh:" prefix games.
@@ -126,6 +129,9 @@ const usageText = `usage: bh [command] [arguments]
                       one at a time; without a name, list them
                       (--undo <name> hands one back; volumes are never removed)
   version             the build, and the Docker Engine bh talks to
+
+  At a terminal, up, down, restart, logs, status, ssh and open ask which
+  environment when none is named.
 `
 
 func (a *app) run(ctx context.Context, args []string) int {
@@ -168,7 +174,15 @@ func (a *app) run(ctx context.Context, args []string) int {
 		return 2
 	}
 
-	return a.finish(command(ctx, args[1:]))
+	rest := args[1:]
+	if localOnly, asks := pickable[name]; asks && len(rest) == 0 && a.isTerminal() {
+		chosen, err := a.askWhich(ctx, name, localOnly)
+		if err != nil {
+			return a.finish(err)
+		}
+		rest = []string{chosen}
+	}
+	return a.finish(command(ctx, rest))
 }
 
 // finish turns the way a command ended into the exit status, saying what

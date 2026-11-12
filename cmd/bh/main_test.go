@@ -14,6 +14,7 @@ import (
 	"github.com/ys319/bulkhead/internal/config"
 	"github.com/ys319/bulkhead/internal/engine/enginetest"
 	"github.com/ys319/bulkhead/internal/image"
+	"github.com/ys319/bulkhead/internal/tui"
 )
 
 // noBuild fails the test if a command tries to build an image.
@@ -40,6 +41,9 @@ type bench struct {
 	typing  bool            // stdin is a terminal
 	builder image.Builder   // nil: any build fails the test
 	raw     int             // how often the terminal was put in raw mode
+	picks   string          // what the user chooses when asked which environment
+	asked   string          // the question that was asked
+	offered []string        // the names that were offered
 }
 
 func newBench(t *testing.T) *bench {
@@ -95,6 +99,16 @@ func (b *bench) run(args ...string) (code int, stdout, stderr string) {
 			return "", errors.New("not found")
 		},
 		isTerminal: func() bool { return b.typing },
+		pick: func(_ context.Context, title string, choices []tui.Choice) (string, error) {
+			b.asked = title
+			for _, choice := range choices {
+				b.offered = append(b.offered, choice.Name)
+			}
+			if b.picks == "" {
+				return "", tui.ErrNothingPicked
+			}
+			return b.picks, nil
+		},
 	}
 	code = a.run(context.Background(), args)
 	return code, out.String(), errOut.String()

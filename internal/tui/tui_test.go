@@ -730,3 +730,25 @@ func TestSanitizeDropsEscapes(t *testing.T) {
 		t.Errorf("sanitize = %q", got)
 	}
 }
+
+func TestPicker(t *testing.T) {
+	p := &picker{title: "Start which environment?", choices: []Choice{{Name: "api", Note: "stopped"}, {Name: "web", Note: "running"}}}
+	send := func(code rune) tea.Cmd {
+		_, cmd := p.Update(tea.KeyPressMsg{Code: code})
+		return cmd
+	}
+	if text := sanitizeLines(p.View().Content); !strings.Contains(text, "❯ api  stopped") || !strings.Contains(text, "  web  running") {
+		t.Errorf("view:\n%s", text)
+	}
+	send(tea.KeyUp)
+	send(tea.KeyDown)
+	send(tea.KeyDown)
+	if cmd := send(tea.KeyEnter); cmd == nil || p.picked != "web" {
+		t.Errorf("picked %q", p.picked)
+	}
+
+	p = &picker{choices: []Choice{{Name: "api"}}}
+	if cmd := send(tea.KeyEscape); cmd == nil || p.picked != "" {
+		t.Errorf("after esc: picked %q", p.picked)
+	}
+}
