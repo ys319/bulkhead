@@ -86,8 +86,6 @@ func (l LegacyStore) Load(name string) (Environment, error) {
 type LegacyExtras struct {
 	Override      bool // compose.override.yaml
 	DevDockerfile bool // dev.Dockerfile
-	GitHubToken   bool // github.json
-	Tokens        bool // tokens.json
 	InitScript    bool // a non-empty init.sh, shared by all environments
 }
 
@@ -101,8 +99,6 @@ func (l LegacyStore) Extras(name string) LegacyExtras {
 	return LegacyExtras{
 		Override:      has("compose.override.yaml"),
 		DevDockerfile: has("dev.Dockerfile"),
-		GitHubToken:   has("github.json"),
-		Tokens:        has("tokens.json"),
 		InitScript:    strings.TrimSpace(string(init)) != "",
 	}
 }

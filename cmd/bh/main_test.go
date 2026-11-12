@@ -5,14 +5,17 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ys319/bulkhead/internal/config"
 	"github.com/ys319/bulkhead/internal/engine/enginetest"
+	"github.com/ys319/bulkhead/internal/github/githubtest"
 	"github.com/ys319/bulkhead/internal/image"
 )
 
@@ -40,6 +43,10 @@ type bench struct {
 	typing  bool            // stdin is a terminal
 	builder image.Builder   // nil: any build fails the test
 	raw     int             // how often the terminal was put in raw mode
+	web     *githubtest.Web // the services tokens come from; any other request fails the test
+	opened  []string        // addresses handed to the browser
+	secret  string          // what is pasted at a hidden prompt
+	now     time.Time       // the clock; zero for the real one
 }
 
 func newBench(t *testing.T) *bench {
@@ -47,6 +54,7 @@ func newBench(t *testing.T) *bench {
 	return &bench{
 		t: t, dir: filepath.Join(root, "bh"), legacy: filepath.Join(root, "bulkhead"), home: filepath.Join(root, "home"),
 		engine: enginetest.New(), path: map[string]bool{"code": true},
+		web: githubtest.New(t),
 	}
 }
 
@@ -95,6 +103,21 @@ func (b *bench) run(args ...string) (code int, stdout, stderr string) {
 			return "", errors.New("not found")
 		},
 		isTerminal: func() bool { return b.typing },
+		httpClient: &http.Client{Transport: b.web},
+		openURL: func(address string) error {
+			b.opened = append(b.opened, address)
+			return nil
+		},
+		readSecret: func(prompt string) (string, error) {
+			errOut.WriteString(prompt)
+			return b.secret, nil
+		},
+		now: func() time.Time {
+			if b.now.IsZero() {
+				return time.Now()
+			}
+			return b.now
+		},
 	}
 	code = a.run(context.Background(), args)
 	return code, out.String(), errOut.String()

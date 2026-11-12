@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -30,6 +31,7 @@ func main() {
 		getenv: os.Getenv, goos: runtime.GOOS,
 		dial: dialEngine, ssh: systemSSH, builder: engine.CLIBuilder{},
 		tool: runTool, lookPath: exec.LookPath, isTerminal: stdinIsTerminal, rawTerminal: rawTerminal,
+		httpClient: newHTTPClient(), openURL: openInBrowser, readSecret: readHiddenLine, now: time.Now,
 	}
 	os.Exit(a.run(ctx, os.Args[1:]))
 }
@@ -45,6 +47,8 @@ type dockerEngine interface {
 	DeviceGIDs(ctx context.Context, image string, devices []string) ([]int, error)
 	Logs(ctx context.Context, id string, opts engine.LogOptions, out io.Writer) error
 	Exec(ctx context.Context, id string, spec engine.ExecSpec, streams engine.Streams) (int, error)
+	WriteVolume(ctx context.Context, job engine.VolumeJob, input []byte) error
+	RunInVolume(ctx context.Context, job engine.VolumeJob) error
 }
 
 // app is one invocation of bh with its surroundings, so that tests can
@@ -70,6 +74,15 @@ type app struct {
 	// go through unprocessed until restore is called. size reports the
 	// terminal's size.
 	rawTerminal func() (restore func(), size func() (height, width uint), err error)
+
+	// httpClient reaches the services tokens come from (GitHub's API).
+	httpClient *http.Client
+	// openURL shows a page in the user's browser.
+	openURL func(url string) error
+	// readSecret prompts on the terminal and reads a line without showing it.
+	readSecret func(prompt string) (string, error)
+	// now is the clock.
+	now func() time.Time
 }
 
 // usageError is a wrong invocation: exit code 2, no "bh:" prefix games.
@@ -108,6 +121,11 @@ const usageText = `usage: bh <command> [arguments]
   remote add | configure | remove
                       environments that run on another machine
                       (bh remote for details)
+  github set | status | revoke
+                      the GitHub token of an environment (bh github for details)
+  token list | set | remove
+                      other tokens of an environment: Hugging Face, or any
+                      variable you name (bh token for details)
   path [<env>]        print the configuration directory (of an environment)
   destroy <env> [--yes]
                       remove the environment and its data
@@ -143,6 +161,8 @@ func (a *app) run(ctx context.Context, args []string) int {
 		"destroy":    a.destroy,
 		"migrate":    a.migrate,
 		"version":    a.version,
+		"github":     a.github,
+		"token":      a.token,
 	}
 	name := args[0]
 	switch name {

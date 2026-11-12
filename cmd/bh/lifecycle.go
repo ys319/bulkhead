@@ -264,7 +264,7 @@ func devImageRepo(id string) string { return "bulkhead-dev-" + id }
 // part of the user's build context. The token files among them hold secrets.
 func keptOutOfBuilds(name string) bool {
 	switch name {
-	case "env.json", "github.json", "tokens.json":
+	case "env.json", "github.json", "tokens.json", "github.clear-pending":
 		return true
 	}
 	return strings.HasSuffix(name, ".tmp") || strings.HasPrefix(name, ".")
@@ -386,6 +386,13 @@ func (a *app) start(ctx context.Context, command, ref string, rebuild *image.Opt
 	}
 	defer disconnect()
 	if err := a.realize(ctx, eng, store, &planned, &target, rebuild); err != nil {
+		return err
+	}
+	// The tokens recorded on this machine go into their volumes before the
+	// environment starts: that is what applies a token set, or takes out
+	// one removed, while Docker could not be reached.
+	writer := volumeWriter{eng: eng, owner: target.Owner, image: target.HolderImage, id: env.ID}
+	if err := writer.sync(ctx, store); err != nil {
 		return err
 	}
 	if err := run(ops.Runner{Engine: eng}, ctx, planned, target); err != nil {
@@ -518,6 +525,9 @@ func (a *app) destroy(ctx context.Context, args []string) error {
 		if !local {
 			what = "its settings (nothing on the remote machine is touched)"
 		}
+		if state, err := store.LoadGitHub(id); local && err == nil && state != nil {
+			what += fmt.Sprintf(".\nIts GitHub token (%s) is revoked on GitHub", state.TokenName)
+		}
 		fmt.Fprintf(a.stderr, "This removes %q: %s.\nType the name to confirm: ", name, what)
 		answer, _ := bufio.NewReader(a.stdin).ReadString('\n')
 		if strings.TrimSpace(answer) != name {
@@ -525,6 +535,7 @@ func (a *app) destroy(ctx context.Context, args []string) error {
 		}
 	}
 
+	var warnings []string
 	if local {
 		eng, disconnect, err := a.dial(a.getenv)
 		if err != nil {
@@ -535,6 +546,10 @@ func (a *app) destroy(ctx context.Context, args []string) error {
 		if err := (ops.Runner{Engine: eng}).Destroy(ctx, id); err != nil {
 			return err
 		}
+		// The tokens come after Docker's part — if that fails the
+		// environment stays, and its token has to keep working — and before
+		// the records go: revoking the GitHub token takes the copy in them.
+		warnings = a.tokenLeftovers(ctx, store, id)
 	}
 	if err := store.RemoveEnvironment(id); err != nil {
 		return err
@@ -544,5 +559,6 @@ func (a *app) destroy(ctx context.Context, args []string) error {
 	}
 	a.syncSSH(store)
 	fmt.Fprintf(a.stdout, "Destroyed %q\n", name)
+	a.warn(warnings)
 	return nil
 }

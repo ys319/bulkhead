@@ -363,7 +363,7 @@ func TestMigrateBringsTheEnvironmentsFilesAndInitScript(t *testing.T) {
 	b.engine.AddLegacy("web", false)
 
 	out := b.ok("migrate", "web", "--yes")
-	for _, part := range []string{"dev.Dockerfile", "files/app.conf", "github.json", "init.sh     copied", "managing its tokens"} {
+	for _, part := range []string{"dev.Dockerfile", "files/app.conf", "github.json", "init.sh     copied"} {
 		if !strings.Contains(out, part) {
 			t.Errorf("output lacks %q:\n%s", part, out)
 		}

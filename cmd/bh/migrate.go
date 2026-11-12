@@ -95,9 +95,8 @@ func assess(legacy config.LegacyStore, store config.Store, name string) (assessm
 		if result.files, err = legacy.Files(name); err != nil {
 			return assessment{}, err
 		}
-		if extras.GitHubToken || extras.Tokens {
-			note("managing its tokens: they stay in place in the environment and keep working (their volumes are used as they are, and their records are copied), but this build cannot yet change, renew or revoke them")
-		}
+		// Its tokens come along whole: the volumes are used as they are, and
+		// their records (github.json, tokens.json) are among the files.
 		if extras.InitScript {
 			theirs, _ := os.ReadFile(legacy.InitScript())
 			ours, err := os.ReadFile(store.InitScript())
