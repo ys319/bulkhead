@@ -43,6 +43,8 @@ type Fake struct {
 	Devices []string
 	// DeviceGroups is the answer to the device probe.
 	DeviceGroups []int
+	// Sizes are the sizes of the volumes, by name.
+	Sizes map[string]int64
 	// MissingImage says which images the engine does not have (nil: it has all).
 	MissingImage func(ref string) bool
 	// Tags are the names images were given.
@@ -213,7 +215,7 @@ func (f *Fake) LogsTail(context.Context, string, int) (string, error) {
 func (f *Fake) Lifecycle() []string {
 	var out []string
 	for _, call := range f.Calls {
-		if !strings.HasPrefix(call, "network ") && !strings.HasPrefix(call, "volume ") && !strings.HasPrefix(call, "probe-") {
+		if !strings.HasPrefix(call, "network ") && !strings.HasPrefix(call, "volume ") && !strings.HasPrefix(call, "probe-") && call != "volume-sizes" {
 			out = append(out, call)
 		}
 	}
@@ -265,4 +267,10 @@ func (f *Fake) Watch(ctx context.Context, _ string) (<-chan struct{}, <-chan err
 		close(changes)
 	}()
 	return changes, done
+}
+
+// VolumeSizes reports Sizes.
+func (f *Fake) VolumeSizes(context.Context) (map[string]int64, error) {
+	f.log("volume-sizes")
+	return f.Sizes, nil
 }

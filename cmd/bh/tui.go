@@ -505,3 +505,12 @@ func (a *app) askWhich(ctx context.Context, command string, localOnly bool) (str
 	}
 	return name, err
 }
+
+func (b backend) DiskUsage(ctx context.Context) (map[string]int64, error) {
+	eng, disconnect, err := b.a.dial(b.a.getenv)
+	if err != nil {
+		return nil, err
+	}
+	defer disconnect()
+	return eng.VolumeSizes(ctx)
+}

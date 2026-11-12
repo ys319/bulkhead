@@ -47,6 +47,7 @@ type dockerEngine interface {
 	Logs(ctx context.Context, id string, opts engine.LogOptions, out io.Writer) error
 	Exec(ctx context.Context, id string, spec engine.ExecSpec, streams engine.Streams) (int, error)
 	Watch(ctx context.Context, label string) (changes <-chan struct{}, done <-chan error)
+	VolumeSizes(ctx context.Context) (map[string]int64, error)
 }
 
 // app is one invocation of bh with its surroundings, so that tests can

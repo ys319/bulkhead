@@ -41,6 +41,10 @@ type Model struct {
 	rows   []row
 	cursor string // the id of the selected row
 	reach  map[string]reachState
+	// disk: the sizes of the volumes, read apart from the list because the
+	// engine takes its time over them. diskFailed: the last try did not work.
+	disk       map[string]int64
+	diskFailed bool
 
 	modals []modal
 	note   *note
@@ -75,6 +79,10 @@ type (
 		id  string
 		err error
 	}
+	diskMsg struct {
+		sizes map[string]int64
+		err   error
+	}
 	doneMsg struct {
 		text    string // what to say when it worked
 		err     error
@@ -89,7 +97,7 @@ type (
 )
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.reload(true), m.watch(m.backend.Watch(m.ctx)), tick())
+	return tea.Batch(m.reload(true), m.measure(), m.watch(m.backend.Watch(m.ctx)), tick())
 }
 
 func tick() tea.Cmd {
@@ -280,7 +288,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmd := m.reload(false)
 		m.own = m.generation
-		return m, cmd
+		return m, tea.Batch(cmd, m.measure())
+
+	case diskMsg:
+		// A failed try keeps the sizes read before.
+		if m.diskFailed = msg.err != nil; !m.diskFailed {
+			m.disk = msg.sizes
+		}
 
 	case execDoneMsg:
 		if msg.err != nil {
@@ -386,7 +400,7 @@ func (m *Model) keyPressed(msg tea.KeyPressMsg) tea.Cmd {
 			m.cursor = m.rows[step(m.rows, index, 1)].id
 		}
 	case "r":
-		return m.reload(true)
+		return tea.Batch(m.reload(true), m.measure())
 	case "m":
 		if said != nil {
 			m.push(&reader{name: "Message", text: said.text})
@@ -509,4 +523,13 @@ func devRunning(state EnvState) bool {
 // created: the environment has containers.
 func created(state EnvState) bool {
 	return state.Status.Holder != nil || state.Status.Dev != nil
+}
+
+// measure reads the sizes of the volumes: at the start, on r and after an
+// action — never as part of following the engine's events.
+func (m *Model) measure() tea.Cmd {
+	return func() tea.Msg {
+		sizes, err := m.backend.DiskUsage(m.ctx)
+		return diskMsg{sizes: sizes, err: err}
+	}
 }

@@ -83,6 +83,9 @@ type Backend interface {
 	// false when the connection to the engine is lost and true when it is
 	// back. The channel closes when ctx ends.
 	Watch(ctx context.Context) <-chan bool
+	// DiskUsage is the size of every volume, by name. It is slow enough to
+	// be asked for apart from the list.
+	DiskUsage(ctx context.Context) (map[string]int64, error)
 	// FollowLogs writes the environment's output, the last tail lines and
 	// then what follows, until ctx ends.
 	FollowLogs(ctx context.Context, name string, tail int, out io.Writer) error

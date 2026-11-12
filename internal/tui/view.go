@@ -230,6 +230,17 @@ func (m *Model) localDetail(state EnvState, inner, rows int) []string {
 	if env.DockerSocket {
 		lines = append(lines, field(inner, "docker", paint(magenta, "host Docker socket mounted — not isolated"))...)
 	}
+	// The disk line is there in every state of the reading, so that nothing
+	// below it moves when the sizes arrive. It is absent only for an
+	// environment without volumes.
+	switch summary, has := DiskSummary(env.ID, m.disk); {
+	case has:
+		lines = append(lines, field(inner, "disk", summary)...)
+	case m.disk == nil && m.diskFailed:
+		lines = append(lines, field(inner, "disk", dim("unavailable"))...)
+	case m.disk == nil:
+		lines = append(lines, field(inner, "disk", dim("fetching..."))...)
+	}
 
 	lines = append(lines, bold("Runtime"))
 	lines = append(lines, field(inner, "  restart", env.Restart)...)

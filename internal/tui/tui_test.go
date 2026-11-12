@@ -182,6 +182,12 @@ func (f *fake) Watch(ctx context.Context) <-chan bool {
 	go func() { <-ctx.Done(); close(changes) }()
 	return changes
 }
+func (f *fake) DiskUsage(context.Context) (map[string]int64, error) {
+	return map[string]int64{
+		"bulkhead-id-web_workspace": 1_200_000_000, "bulkhead-id-web_home": 513_000_000,
+		"bulkhead-id-web_nix": 2_500_000_000, "bulkhead-id-web_hostkeys": 4096,
+	}, f.fail["disk"]
+}
 func (f *fake) FollowLogs(ctx context.Context, name string, _ int, out io.Writer) error {
 	fmt.Fprintf(out, "[dev] hello from %s\n", name)
 	<-ctx.Done()
@@ -221,6 +227,7 @@ func start(t *testing.T) *screenOf {
 	s := &screenOf{t: t, Model: New(ctx, backend), backend: backend}
 	s.Update(tea.WindowSizeMsg{Width: 110, Height: 30})
 	s.settle(s.reload(true))
+	s.settle(s.measure())
 	return s
 }
 
@@ -662,7 +669,8 @@ func TestDetailOfARunningEnvironment(t *testing.T) {
 	s.settle(s.tendLogs())
 	time.Sleep(20 * time.Millisecond)
 	s.shows("state: running, up 3h", "restart: unless-stopped", "address: 127.0.0.1:22001", "alias: bulkhead-web",
-		"keys: this machine + 1", "Logs", "[dev] hello from web")
+		"keys: this machine + 1", "Logs", "[dev] hello from web",
+		"disk: 4.2GB (workspace 1.2GB, home 513MB, nix 2.5GB)")
 	s.onto("box")
 	s.shows("box (remote)", "address: studio.test:22001")
 }
@@ -750,5 +758,16 @@ func TestPicker(t *testing.T) {
 	p = &picker{choices: []Choice{{Name: "api"}}}
 	if cmd := send(tea.KeyEscape); cmd == nil || p.picked != "" {
 		t.Errorf("after esc: picked %q", p.picked)
+	}
+}
+
+func TestHumanBytes(t *testing.T) {
+	for size, want := range map[int64]string{0: "0B", 999: "999B", 4096: "4.1kB", 513_000_000: "513MB", 1_200_000_000: "1.2GB", 25_000_000_000: "25GB"} {
+		if got := humanBytes(size); got != want {
+			t.Errorf("humanBytes(%d) = %q, want %q", size, got, want)
+		}
+	}
+	if _, has := DiskSummary("nope", map[string]int64{"bulkhead-id-web_home": 1}); has {
+		t.Error("an environment without volumes got a disk summary")
 	}
 }

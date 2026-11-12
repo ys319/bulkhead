@@ -87,3 +87,20 @@ func ParseDeviceProbe(output string) []int {
 	slices.Sort(gids)
 	return gids
 }
+
+// VolumeSizes are the sizes of all volumes of the engine, by name. One call
+// covers every environment, but the engine walks the volumes for it: this
+// is for the moments the user asks, not for every refresh.
+func (c *Client) VolumeSizes(ctx context.Context) (map[string]int64, error) {
+	usage, err := c.api.DiskUsage(ctx, client.DiskUsageOptions{Volumes: true, Verbose: true})
+	if err != nil {
+		return nil, err
+	}
+	sizes := make(map[string]int64, len(usage.Volumes.Items))
+	for _, volume := range usage.Volumes.Items {
+		if volume.UsageData != nil && volume.UsageData.Size >= 0 {
+			sizes[volume.Name] = volume.UsageData.Size
+		}
+	}
+	return sizes, nil
+}

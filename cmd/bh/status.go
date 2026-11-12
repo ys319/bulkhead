@@ -10,6 +10,7 @@ import (
 	"github.com/ys319/bulkhead/internal/config"
 	"github.com/ys319/bulkhead/internal/engine"
 	"github.com/ys319/bulkhead/internal/ops"
+	"github.com/ys319/bulkhead/internal/tui"
 )
 
 // sshAddress is where the environment's ssh server is reached from here.
@@ -133,6 +134,13 @@ func (a *app) status(ctx context.Context, args []string) error {
 	row("ssh", address)
 	if env.DockerSocket {
 		row("boundary", "none — "+socketWarning)
+	}
+	// Sizes are worth the engine's walk over the volumes here, where one
+	// environment is asked about; the list does without.
+	if sizes, err := eng.VolumeSizes(ctx); err == nil {
+		if summary, has := tui.DiskSummary(env.ID, sizes); has {
+			row("disk", summary)
+		}
 	}
 	row("holder", describe(current.Holder, time.Now()))
 	row("dev", describe(current.Dev, time.Now()))
