@@ -255,3 +255,14 @@ func (f *Fake) DeviceGIDs(_ context.Context, _ string, devices []string) ([]int,
 	f.log("probe-devices %s", strings.Join(devices, ","))
 	return f.DeviceGroups, nil
 }
+
+// Watch reports nothing until the context ends.
+func (f *Fake) Watch(ctx context.Context, _ string) (<-chan struct{}, <-chan error) {
+	changes, done := make(chan struct{}), make(chan error, 1)
+	go func() {
+		<-ctx.Done()
+		done <- nil
+		close(changes)
+	}()
+	return changes, done
+}

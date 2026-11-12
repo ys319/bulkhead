@@ -203,15 +203,32 @@ func (a *app) path(_ context.Context, args []string) error {
 	return usagef("usage: bh path [<env>]")
 }
 
+// sshArgs are the arguments of the ssh client for the environment: the same
+// terms as its entry in the ssh configuration. IdentitiesOnly keeps an
+// agent full of keys from using up the server's tries before the machine
+// key gets its turn.
+func sshArgs(store config.Store, env config.Environment, options ...string) []string {
+	host := env.Host
+	if env.Local() {
+		host = "127.0.0.1"
+	}
+	args := []string{
+		"-i", store.MachineKey(),
+		"-p", strconv.Itoa(env.SSHPort),
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "IdentitiesOnly=yes",
+	}
+	for _, option := range options {
+		args = append(args, "-o", option)
+	}
+	return append(args, "developer@"+host)
+}
+
 func (a *app) sshInto(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return usagef("usage: bh ssh <env> [command...]")
 	}
-	store, err := a.store()
-	if err != nil {
-		return err
-	}
-	cfg, err := store.Load()
+	store, cfg, err := a.load()
 	if err != nil {
 		return err
 	}
@@ -219,36 +236,10 @@ func (a *app) sshInto(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-
-	host := env.Host
-	if env.Local() {
-		host = "127.0.0.1"
-		// Say what is wrong instead of ssh's "Connection refused".
-		eng, disconnect, err := a.dial(a.getenv)
-		if err != nil {
-			return err
-		}
-		current, err := (ops.Runner{Engine: eng}).Inspect(ctx, env.ID)
-		disconnect()
-		if err != nil {
-			return err
-		}
-		if current.Dev == nil || !current.Dev.Running() {
-			return fmt.Errorf("%q is not running (start it with bh up %s)", env.Name, env.Name)
-		}
+	if err := a.requireRunning(ctx, env); err != nil {
+		return err
 	}
-
-	// The same terms as the ssh config entry for the environment.
-	// IdentitiesOnly keeps an agent full of keys from using up the server's
-	// tries before the machine key gets its turn.
-	sshArgs := append([]string{
-		"-i", store.MachineKey(),
-		"-p", strconv.Itoa(env.SSHPort),
-		"-o", "StrictHostKeyChecking=accept-new",
-		"-o", "IdentitiesOnly=yes",
-		"developer@" + host,
-	}, args[1:]...)
-	code, err := a.ssh(sshArgs)
+	code, err := a.ssh(append(sshArgs(store, env), args[1:]...))
 	if err != nil {
 		return err
 	}

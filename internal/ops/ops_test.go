@@ -3,6 +3,8 @@ package ops
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -339,4 +341,60 @@ func TestState(t *testing.T) {
 	f.Containers[holderName].Health = "starting"
 	f.HealthAfterStart = []string{"starting"}
 	expect(StateStarting, "during up")
+}
+
+func TestResetRemovesHomeAndNixOnly(t *testing.T) {
+	f := enginetest.New()
+	r := runner(f)
+	if err := r.Up(context.Background(), env, target); err != nil {
+		t.Fatal(err)
+	}
+	f.Calls = nil
+
+	if err := r.Reset(context.Background(), env.ID); err != nil {
+		t.Fatal(err)
+	}
+	expectCalls(t, f,
+		"stop "+devName, "stop "+holderName,
+		"remove "+devName, "remove "+holderName,
+		"rm-volume bulkhead-e1_home", "rm-volume bulkhead-e1_nix")
+	// The user's work, the ssh identity and the credentials stay.
+	for _, key := range []string{"workspace", "hostkeys", "github", "tokens"} {
+		if !f.Volumes["bulkhead-e1_"+key] {
+			t.Errorf("the %s volume is gone", key)
+		}
+	}
+
+	// The next up starts from fresh volumes.
+	if err := r.Up(context.Background(), env, target); err != nil {
+		t.Fatal(err)
+	}
+	if !f.Volumes["bulkhead-e1_home"] || !f.Volumes["bulkhead-e1_nix"] {
+		t.Error("up did not create the volumes again")
+	}
+}
+
+func TestOnlyDestroyAndResetRemoveVolumes(t *testing.T) {
+	// The rule the project is built around, checked on the source: the
+	// engine's RemoveVolume is called from removeVolumes, and removeVolumes
+	// from Destroy and Reset.
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var removers, callers int
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		removers += strings.Count(string(data), ".RemoveVolume(ctx")
+		callers += strings.Count(string(data), "r.removeVolumes(")
+	}
+	if removers != 1 || callers != 2 {
+		t.Errorf("RemoveVolume is called from %d places (want 1), removeVolumes from %d (want 2: Destroy and Reset)", removers, callers)
+	}
 }

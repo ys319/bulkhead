@@ -258,18 +258,46 @@ func (r Runner) Down(ctx context.Context, id string) error {
 
 // Destroy removes everything the environment has in Docker: containers,
 // volumes (the data, and the credentials bh put there) and the network.
-// The caller confirms first. This is the only place a volume is removed.
+// The caller confirms first.
 func (r Runner) Destroy(ctx context.Context, id string) error {
 	if err := r.removeContainers(ctx, id); err != nil {
 		return err
 	}
-	for _, key := range plan.AllVolumeKeys() {
-		if err := r.Engine.RemoveVolume(ctx, plan.Volume(id, key)); err != nil {
-			return fmt.Errorf("removing the %s volume: %w", key, err)
-		}
+	if err := r.removeVolumes(ctx, id, plan.AllVolumeKeys()); err != nil {
+		return err
 	}
 	if err := r.Engine.RemoveNetwork(ctx, plan.Network(id)); err != nil {
 		return fmt.Errorf("removing the network: %w", err)
+	}
+	return nil
+}
+
+// ResetKeys are the volumes Reset removes: the state of the environment
+// itself. The workspace (the user's work), the ssh host identity and the
+// credentials bh handed in are not among them.
+var ResetKeys = []string{"home", "nix"}
+
+// Reset takes the environment back to what the image provides: it removes
+// the containers and the home and nix volumes, and nothing else. The next
+// Up creates them fresh, and init.sh runs again. The caller confirms first.
+func (r Runner) Reset(ctx context.Context, id string) error {
+	if err := r.Down(ctx, id); err != nil {
+		return err
+	}
+	if err := r.removeContainers(ctx, id); err != nil {
+		return err
+	}
+	return r.removeVolumes(ctx, id, ResetKeys)
+}
+
+// removeVolumes is the one place volumes are removed. Its two callers are
+// the commands whose purpose is to delete data — Destroy and Reset — and
+// nothing else may call it: not migrate, not restart, not a repair.
+func (r Runner) removeVolumes(ctx context.Context, id string, keys []string) error {
+	for _, key := range keys {
+		if err := r.Engine.RemoveVolume(ctx, plan.Volume(id, key)); err != nil {
+			return fmt.Errorf("removing the %s volume: %w", key, err)
+		}
 	}
 	return nil
 }

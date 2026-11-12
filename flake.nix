@@ -51,7 +51,7 @@
           # Hash of every module the build downloads — a second pin on top of
           # go.sum. It changes whenever a dependency changes; update it in the
           # same commit, after reviewing what changed.
-          vendorHash = "sha256-+yivSioU/uQZkrBtV5aNF0N3ucbiJHUtgjpuL7hryws=";
+          vendorHash = "sha256-2km9mJM6WDGVsmfaz5k3Tnx4xb3IXzLF9pLzJLyycd8=";
           subPackages = [ "cmd/bh" ];
           env.CGO_ENABLED = "0";
           meta.mainProgram = "bh";

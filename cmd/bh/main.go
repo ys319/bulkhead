@@ -45,6 +45,7 @@ type dockerEngine interface {
 	DeviceGIDs(ctx context.Context, image string, devices []string) ([]int, error)
 	Logs(ctx context.Context, id string, opts engine.LogOptions, out io.Writer) error
 	Exec(ctx context.Context, id string, spec engine.ExecSpec, streams engine.Streams) (int, error)
+	Watch(ctx context.Context, label string) (changes <-chan struct{}, done <-chan error)
 }
 
 // app is one invocation of bh with its surroundings, so that tests can
@@ -87,8 +88,9 @@ type exitCode int
 
 func (e exitCode) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
 
-const usageText = `usage: bh <command> [arguments]
+const usageText = `usage: bh [command] [arguments]
 
+  (none)              the full-screen interface (everything below, in menus)
   create <name> [--from <env>] [--port N] [--publish] [--restart unless-stopped|no]
                       define a new environment (start it with up); --from
                       copies the settings and dev.Dockerfile of another one
@@ -97,7 +99,9 @@ const usageText = `usage: bh <command> [arguments]
   rename <env> <new-name>
   up <env>            start the environment, creating what is missing
   down <env> | --all  stop it; containers and data stay
-  restart <env>       stop, recreate both containers, start
+  restart <env> [--rebuild [--pull] [--no-cache]]
+                      stop, recreate both containers, start; --rebuild
+                      builds the image again first
   list                all environments and their state
   status <env>        one environment in detail
   ssh <env> [command] open a shell in the environment, or run a command
@@ -108,7 +112,14 @@ const usageText = `usage: bh <command> [arguments]
   remote add | configure | remove
                       environments that run on another machine
                       (bh remote for details)
+  logs <env> [--tail N] [--no-follow]
+                      the output of both containers (follows; Ctrl-C ends)
+  init <env>          run init.sh in the running environment now
+  root-shell <env>    a root shell in the running environment (full
+                      privileges, for troubleshooting)
+  gpu list            the CDI devices the Docker engine offers
   path [<env>]        print the configuration directory (of an environment)
+  reset <env> [--yes] delete home and nix, keep the workspace
   destroy <env> [--yes]
                       remove the environment and its data
   migrate [<name>]    take over an environment of the TypeScript version,
@@ -119,8 +130,7 @@ const usageText = `usage: bh <command> [arguments]
 
 func (a *app) run(ctx context.Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(a.stderr, usageText)
-		return 2
+		return a.finish(a.interactive(ctx))
 	}
 	commands := map[string]func(context.Context, []string) error{
 		"create":     a.create,
@@ -158,7 +168,12 @@ func (a *app) run(ctx context.Context, args []string) int {
 		return 2
 	}
 
-	err := command(ctx, args[1:])
+	return a.finish(command(ctx, args[1:]))
+}
+
+// finish turns the way a command ended into the exit status, saying what
+// went wrong.
+func (a *app) finish(err error) int {
 	var usage usageError
 	var code exitCode
 	switch {
