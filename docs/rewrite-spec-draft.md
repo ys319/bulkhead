@@ -254,21 +254,28 @@ bh secret set <env> <NAME>            # 値は端末なら非表示で入力、�
 bh secret remove <env> <NAME>
 
 bh token list [<env>]                 # サービス・プリセット・対象・期限
-bh token set [<env>] [<service>] [<preset>] [--owner …] [--days …] [--no-open]
-bh token refresh [<env>] [<service>]
-bh token remove [<env>] [<service>] [--yes]
+bh token set <env> <service> [<preset>] [--owner …] [--days …] [--no-open]
+bh token refresh <env> [<service>]
+bh token remove <env> [<service>] [--yes]
 ```
 
-**引数は「順番に決めること」で、足りない分は対話で聞く**（方針、ユーザー）。`bh token set` なら
-環境 → サービス → プリセット（そのサービスにあれば）の順。端末で実行して途中から省くと、省いた
-ところから選ばせる（`bh token set web` はサービスから、`bh token set` は環境から）。端末でなければ、足りない引数を
-名指しして使い方のエラーにする。この決まりはほかのコマンドにも広げる（後から。いまは環境名だけ
-選べる）。
+**足りない引数を対話で聞くことはしない**（決定 2026-11-13、ユーザー。いったん「省いた分は順に
+聞く」で作り、全コマンドへ広げる案も考えたうえで取りやめた — 選ぶのは**シェルの補完**の役目に
+する）。足りなければ、何が足りないかと選べるものを示して使い方のエラーにする。`<service>` は、
+その環境に token が1本しかないときだけ省ける。語順は動詞が先のまま（`bh <env> …` の形にはしない
+— 同日の決定）。
+
+**補完**（`bh completion zsh|bash`）: シェル側のスクリプトは入口だけで、候補は bh 自身が答える
+（`bh __complete -- <入力中の語…>`）。表と設定ディレクトリから、位置ごとに出す: コマンドと
+サブコマンド（説明つき）、環境（コマンドに合うもの — `up` はアーカイブ中でないもの、`unarchive` は
+アーカイブ中のもの）、サービス、そのサービスのプリセット（何を許すかの説明つき、弱い順）、その
+環境が持つ token・変数名・secret の名前・スナップショット（`rollback` は `latest` も）・鍵、フラグと
+その値。Docker にも資格情報ストアにも触れない。
 
 - `set`（`add` でなく `set` — 環境ごと・サービスごとに1本で、もう一度実行すると置き換わるので。
   var / secret の `set` とも揃う）: 発行ページを開く（入れられる項目は埋めておく）→ 利用者が
   発行して貼る → サービスに問い合わせて確かめる → 分かったこと（持ち主・対象・期限）を見せる →
-  記録して環境へ入れる。その環境に同じサービスの token がすでにあれば、置き換えるかを聞き、
+  記録して環境へ入れる。その環境に同じサービスの token がすでにあれば、置き換わることを示し、
   入れ替えた後で前のものを失効させる。
 - `refresh`: **同じトークンを、サービスのページで再発行して貼る**（指定はそのまま。値と期限が
   新しくなる）。`set` との違いは「何を持たせるか」を変えないこと。貼られたものを確かめ、前の記録と違うところ（持ち主・対象）があれば
@@ -316,7 +323,7 @@ helper）
 - どれにも入れない: Workflows（CI から秘密を持ち出せる）、Secrets、Administration、Webhooks。
 - Issues は入れていない（PR へのコメントは Pull requests: write で足りる）。
 - リポジトリの選択はページで利用者が行う（URL では埋められない — 公式文書で確認）。持ち主は1つ
-  （`--owner`、対話では「自分のアカウント」を既定にして聞く）。期限の既定は30日（`--days`）。
+  （`--owner`。省くと自分のアカウント）。期限の既定は30日（`--days`）。
 - 確かめ方・失効は今のまま（API で持ち主・期限・リポジトリを読む / `POST /credentials/revoke`）。
 - `refresh`: トークンのページの Regenerate を使う（**リポジトリの選択は残る** — ユーザーが
   確認、2026-11-13。公式文書には記載が無い）。トークンのページは
@@ -884,7 +891,8 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | 上の修正 (手) | `bh open` が新しいウィンドウを開く / TUI の Logs から Ctrl-C で TUI へ戻る / 失敗した ssh の後で Enter を待つ / `HostKeyAlias` つきの項目で VS Code Remote SSH がつながる / メニューの幅 / 下段の並び（メッセージ → 操作説明） |
 | var / secret | `scripts/verify-features.sh` の「variables and secrets」の節: 空白・引用符・`$` を含む値がそのまま新しいシェルに届く、小文字の名前、secret の値が記録に残らない、外すと消える。**環境の中で値を読む側（bh-guest の引用）を変えたので、dev イメージが作り直される** |
 | 資格情報ストア (手) | `BH_VERIFY_KEYCHAIN=1 scripts/verify-features.sh <bh>` — 自分のキーチェーンに値を1つ入れて出す（既定では走らない）。macOS のキーチェーンで、値がファイルに残らず、`bh restart` で読み戻せ、消すと項目が無くなること。ssh 越しなど使えない場所で「ファイルにする」案内が出ること。Windows・Linux は未確認 |
-| token (手) | 本物のトークンで: `bh token set`（対話で環境 → サービス → プリセット → 持ち主）、GitHub の3つのプリセットで発行ページに入る権限、`bh token refresh`（Regenerate して貼る）、`bh token remove` の失効、Hugging Face の種類の読み取りと失効（**Hugging Face の API は文書を読んだだけで、一度も呼んでいない**）、`gh run view --log` が `push` で通ること、期限が近いときの表示。前のビルドで設定したトークン（`github.json`）が読み替えられること |
+| 補完 (手) | `eval "$(bh completion zsh)"` で、`bh token set <env> ` の後にサービス、その後にプリセットが説明つきで弱い順に出る / `bh var unset <env> ` で変数名 / `bh rollback <env> ` でスナップショット。ここでは本物の zsh を擬似端末で動かして確かめた。bash は入口のスクリプトだけ確かめた |
+| token (手) | 本物のトークンで: `bh token set <env> <service> <preset>`、GitHub の3つのプリセットで発行ページに入る権限、`bh token refresh`（Regenerate して貼る）、`bh token remove` の失効、Hugging Face の種類の読み取りと失効（**Hugging Face の API は文書を読んだだけで、一度も呼んでいない**）、`gh run view --log` が `push` で通ること、期限が近いときの表示。前のビルドで設定したトークン（`github.json`）が読み替えられること |
 | GitHub トークン (手) | `revoke`、`destroy` 時の失効、git と gh から使えること。Windows のコンソールでの非表示入力 |
 | restart --rebuild (手) | `--pull --no-cache` で作り直され、コンテナが新しいイメージで起動する |
 | GPU (手・対応機のみ) | legacy / cdi の起動、`bh gpu list`、デバイスノードの gid |

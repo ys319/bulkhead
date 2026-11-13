@@ -230,7 +230,7 @@ func (a *app) run(ctx context.Context, args []string) int {
 		"doctor":     a.doctor,
 		"completion": a.completion,
 		// For the completion scripts; not in the usage text.
-		"__complete": a.completeNames,
+		"__complete": a.completeLine,
 	}
 	name := args[0]
 	switch name {

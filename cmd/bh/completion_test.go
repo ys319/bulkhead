@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ys319/bulkhead/internal/config"
 )
 
 func completedNames() []string {
@@ -38,69 +40,14 @@ func TestCompletionPrintsAScript(t *testing.T) {
 	}
 }
 
-func TestCompletionScriptsCarryTheWholeVocabulary(t *testing.T) {
-	for _, shell := range []string{"zsh", "bash"} {
-		script, err := completionScript(shell)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, command := range completedCommands {
-			if !regexp.MustCompile(`(^|[\s'"|])` + regexp.QuoteMeta(command.name) + `($|[\s'":|)])`).MatchString(script) {
-				t.Errorf("%s: the command %s is missing", shell, command.name)
-			}
-			for _, flag := range command.flags {
-				if !strings.Contains(script, flag) {
-					t.Errorf("%s: the flag %s of %s is missing", shell, flag, command.name)
-				}
-			}
-			for _, sub := range command.subs {
-				if !strings.Contains(script, sub.name) {
-					t.Errorf("%s: %s %s is missing", shell, command.name, sub.name)
-				}
-			}
-		}
-		// A slip in putting the script together shows as a formatting verb
-		// left behind.
-		if strings.Contains(script, "%!") || strings.Contains(script, "%s") {
-			t.Errorf("%s: the script has an unfilled place:\n%s", shell, script)
-		}
-	}
-
-	zsh, _ := completionScript("zsh")
-	for _, command := range completedCommands {
-		if !strings.Contains(zsh, "'"+command.name+":"+command.about+"'") {
-			t.Errorf("zsh: no description for %s", command.name)
-		}
-	}
-	for _, part := range []string{
-		"'attach[let a key log in to an environment]'",
-		"'configure[change host or port]'",
-		"compadd -- --version --help",
-		"_values 'completion command' zsh bash",
-	} {
-		if !strings.Contains(zsh, part) {
-			t.Errorf("zsh lacks %q", part)
-		}
-	}
-	bash, _ := completionScript("bash")
-	for _, part := range []string{
-		`compgen -W "--version --help" -- "$cur"`,
-		`compgen -W "` + strings.Join(completedNames(), " ") + `" -- "$cur"`,
-		`compgen -W "zsh bash" -- "$cur"`,
-	} {
-		if !strings.Contains(bash, part) {
-			t.Errorf("bash lacks %q", part)
-		}
-	}
-}
-
-// The descriptions stand unquoted inside zsh's 'name:description' and
-// 'name[description]': one apostrophe ("machine's") and the script is an
-// unmatched quote.
-func TestCompletionDescriptionsFitZshsForms(t *testing.T) {
+// The descriptions travel as "name<TAB>description" lines and stand inside
+// zsh's 'name:description': a colon, a tab or a line break in one would be
+// read as syntax.
+func TestCompletionDescriptionsAreOneField(t *testing.T) {
 	check := func(where, about string) {
-		if strings.ContainsAny(about, `:'[]\`) {
-			t.Errorf("%s: %q has a character zsh takes as syntax", where, about)
+		t.Helper()
+		if strings.ContainsAny(about, ":\t\n") {
+			t.Errorf("%s: %q has a character the scripts take as syntax", where, about)
 		}
 	}
 	for _, command := range completedCommands {
@@ -109,11 +56,17 @@ func TestCompletionDescriptionsFitZshsForms(t *testing.T) {
 		}
 		check(command.name, command.about)
 		for _, sub := range command.subs {
+			if sub.about == "" {
+				t.Errorf("%s %s has no description", command.name, sub.name)
+			}
 			check(command.name+" "+sub.name, sub.about)
 		}
 	}
-	for _, kind := range tokenKinds {
-		check("token kind "+kind.name, kind.about)
+	for _, service := range tokenServices {
+		check(service.Name, service.Title)
+		for _, preset := range service.Presets {
+			check(service.Name+" "+preset.Name, preset.About)
+		}
 	}
 }
 
@@ -151,44 +104,174 @@ func TestCompletionKnowsTheCommands(t *testing.T) {
 	if slices.Contains(completedNames(), "__complete") || strings.Contains(usageText, "__complete") {
 		t.Error("__complete is offered to the user")
 	}
-}
-
-// The names of the environments come from bh itself while the user types:
-// from the configuration directory alone, and without a word on any
-// problem.
-func TestCompletionHelperPrintsTheEnvironments(t *testing.T) {
-	b := newBench(t)
-	// Nothing there yet: nothing to offer, nothing to say.
-	if code, stdout, stderr := b.run("__complete", "envs"); code != 0 || stdout != "" || stderr != "" {
-		t.Errorf("no configuration: exit %d, %q, %q", code, stdout, stderr)
-	}
-
-	b.ok("create", "web")
-	b.ok("create", "api")
-	b.ok("remote", "add", "example.test:22/box")
-	for _, tt := range []struct {
-		args []string
-		want string
-	}{
-		{[]string{"envs"}, "api\nbox\nweb\n"},
-		{[]string{"envs", "all"}, "api\nbox\nweb\n"},
-		{[]string{"envs", "local"}, "api\nweb\n"},
-		{[]string{"envs", "remote"}, "box\n"},
-		{[]string{"keys"}, ""},
-		{nil, ""},
-	} {
-		if got := b.ok(append([]string{"__complete"}, tt.args...)...); got != tt.want {
-			t.Errorf("__complete %v = %q, want %q", tt.args, got, tt.want)
+	// A subcommand of the table is one bh knows: it stops at its own
+	// usage, not at the command's.
+	for _, command := range completedCommands {
+		for _, sub := range command.subs {
+			if _, _, stderr := b.run(command.name, sub.name, "--no-such-flag"); strings.Contains(stderr, "usage: bh "+command.name+" <subcommand>") {
+				t.Errorf("the completion offers %q %q, which bh does not know", command.name, sub.name)
+			}
 		}
 	}
+}
+
+// offered asks bh what it offers for the last word of the line and returns
+// the names, in order.
+func (b *bench) completes(line ...string) []string {
+	b.t.Helper()
+	code, stdout, stderr := b.run(append([]string{"__complete", "--"}, line...)...)
+	if code != 0 || stderr != "" {
+		b.t.Fatalf("__complete %q: exit %d, stderr %q", line, code, stderr)
+	}
+	var names []string
+	for _, entry := range strings.Split(strings.TrimSuffix(stdout, "\n"), "\n") {
+		if entry != "" {
+			name, _, _ := strings.Cut(entry, "\t")
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// Choosing is the completion's part: for every position bh says what goes
+// there — from its table, and from what the environments have.
+func TestCompletionOffersWhatGoesAtEachPosition(t *testing.T) {
+	b := newBench(t)
+	withData(t, b, "web")
+	b.ok("create", "api")
+	b.ok("remote", "add", "example.test:22/box")
+	b.ok("create", "old")
+	old := b.env("old")
+	old.Archived = "2026-11-01T000000Z.tar.gz"
+	if err := (config.Store{Dir: b.dir}).SaveEnvironment(old); err != nil {
+		t.Fatal(err)
+	}
+	b.ok("var", "set", "web", "NODE_ENV", "development")
+	b.ok("var", "set", "web", "NAME", "x")
+	b.stdin = "v"
+	b.ok("secret", "set", "web", "API_KEY")
+	b.seedGitHub("web", patNew)
+	b.ok("snapshot", "create", "web", "--note", "first")
+	b.tick()
+	b.ok("snapshot", "create", "web")
+	line, _ := publicKey(t, "laptop")
+	b.stdin = line
+	b.ok("key", "add", "--label", "laptop")
+	line, _ = publicKey(t, "phone")
+	b.stdin = line
+	b.ok("key", "add", "--label", "phone")
+	b.ok("key", "attach", "web", "phone")
+	b.engine.Calls = nil
+	kept := len(b.keychain)
+
+	for _, test := range []struct {
+		line []string
+		want []string
+	}{
+		// Commands and their parts.
+		{[]string{"to"}, []string{"token"}},
+		{[]string{"-"}, []string{"--version", "--help"}},
+		{[]string{"token", ""}, []string{"list", "set", "refresh", "remove"}},
+		{[]string{"token", "re"}, []string{"refresh", "remove"}},
+		{[]string{"completion", ""}, []string{"zsh", "bash"}},
+		{[]string{"secret", "store", ""}, []string{"keychain", "file"}},
+		{[]string{"nosuch", ""}, nil},
+		{[]string{"token", "nosuch", ""}, nil},
+
+		// Environments, by what the command can be used on.
+		{[]string{"status", ""}, []string{"api", "box", "old", "web"}},
+		{[]string{"up", ""}, []string{"api", "web"}},
+		{[]string{"up", "w"}, []string{"web"}},
+		{[]string{"unarchive", ""}, []string{"old"}},
+		{[]string{"remote", "remove", ""}, []string{"box"}},
+		{[]string{"create", "--from", ""}, []string{"api", "old", "web"}},
+		{[]string{"up", "web", ""}, nil},
+
+		// Tokens: the service, then the presets of that service.
+		{[]string{"token", "set", ""}, []string{"api", "web"}},
+		{[]string{"token", "set", "web", ""}, []string{"github", "huggingface"}},
+		{[]string{"token", "set", "web", "github", ""}, []string{"read", "push", "contribute"}},
+		{[]string{"token", "set", "web", "github", "p"}, []string{"push"}},
+		{[]string{"token", "set", "web", "huggingface", ""}, nil},
+		{[]string{"token", "set", "web", "hf", ""}, nil},
+		// What the environment has.
+		{[]string{"token", "refresh", "web", ""}, []string{"github"}},
+		{[]string{"token", "remove", "api", ""}, nil},
+		{[]string{"var", "unset", "web", ""}, []string{"NAME", "NODE_ENV"}},
+		{[]string{"var", "unset", "web", "NO"}, []string{"NODE_ENV"}},
+		{[]string{"var", "set", "web", "NODE_ENV", ""}, nil},
+		{[]string{"secret", "remove", "web", ""}, []string{"API_KEY"}},
+		{[]string{"rollback", "web", ""}, []string{"latest", "2026-11-13T090100Z", "2026-11-13T090000Z"}},
+		{[]string{"snapshot", "remove", "web", ""}, []string{"2026-11-13T090100Z", "2026-11-13T090000Z"}},
+		{[]string{"rollback", "api", ""}, nil},
+		{[]string{"key", "attach", "web", ""}, []string{"laptop", "phone"}},
+		{[]string{"key", "detach", "web", ""}, []string{"phone"}},
+		{[]string{"key", "remove", ""}, []string{"laptop", "phone"}},
+
+		// Flags: those of the command, each once; and what follows one.
+		{[]string{"token", "set", "web", "github", "--"}, []string{"--owner", "--days", "--no-open"}},
+		{[]string{"token", "set", "--no-open", "web", "--"}, []string{"--owner", "--days"}},
+		{[]string{"token", "set", "--owner", ""}, nil},
+		{[]string{"token", "set", "--owner", "acme", "web", ""}, []string{"github", "huggingface"}},
+		{[]string{"token", "set", "--owner=acme", "web", ""}, []string{"github", "huggingface"}},
+		{[]string{"rollback", "web", "--only", ""}, []string{"workspace", "home"}},
+		{[]string{"rollback", "--only", "home", "web", ""}, []string{"latest", "2026-11-13T090100Z", "2026-11-13T090000Z"}},
+		{[]string{"configure", "web", "--gpu", ""}, []string{"off", "legacy", "cdi"}},
+		{[]string{"configure", "web", "--publish", ""}, []string{"on", "off"}},
+		{[]string{"create", "new", "--restart", "u"}, []string{"unless-stopped"}},
+		{[]string{"reset", "web", "--"}, []string{"--home", "--no-snapshot", "--yes"}},
+
+		// Where a file's name goes, the shell completes.
+		{[]string{"export", "web", ""}, []string{"__files__"}},
+		{[]string{"import", ""}, []string{"__files__"}},
+		{[]string{"import", "some.tar.gz", ""}, nil},
+	} {
+		if got := b.completes(test.line...); !slices.Equal(got, test.want) {
+			t.Errorf("bh %s⇥\n  got  %q\n  want %q", strings.Join(test.line, " "), got, test.want)
+		}
+	}
+
+	// At the very start: every command, with what it is for.
+	all := b.completes("")
+	if !slices.Equal(all, completedNames()) {
+		t.Errorf("at the start: %q", all)
+	}
+	_, described, _ := b.run("__complete", "--", "token", "set", "web", "github", "")
+	if !strings.Contains(described, "push\talso push") {
+		t.Errorf("the presets come without what they allow:\n%s", described)
+	}
+	_, held, _ := b.run("__complete", "--", "token", "refresh", "web", "")
+	if !strings.Contains(held, "github\tpush · octo") || strings.Contains(held, "github_pat") {
+		t.Errorf("the tokens it has:\n%s", held)
+	}
+
+	// It answers while the user types: from the directory alone.
 	if len(b.engine.Calls) != 0 {
 		t.Errorf("a completion asked Docker: %v", b.engine.Calls)
 	}
+	if len(b.keychain) != kept {
+		t.Errorf("a completion changed the keychain: %v", b.keychain)
+	}
+}
 
-	// A directory bh cannot load (two environments with one name): an
-	// error here would be printed into the command line being typed.
+// On any problem it says nothing: an error would be printed into the
+// command line being typed.
+func TestCompletionIsSilentWhenItCannotAnswer(t *testing.T) {
+	b := newBench(t)
+	// Nothing there yet.
+	for _, line := range [][]string{{"up", ""}, {"token", "refresh", "web", ""}, {"rollback", "web", ""}, nil} {
+		if code, stdout, stderr := b.run(append([]string{"__complete", "--"}, line...)...); code != 0 || stdout != "" || stderr != "" {
+			t.Errorf("no configuration, %q: exit %d, %q, %q", line, code, stdout, stderr)
+		}
+	}
+	if _, err := os.Stat(b.dir); !os.IsNotExist(err) {
+		t.Errorf("a completion made the configuration directory: %v", err)
+	}
+
+	// A directory bh cannot load (two environments with one name).
+	b.ok("create", "web")
+	b.ok("create", "api")
 	web := b.env("web")
-	web.Name = "api"
 	data, err := os.ReadFile(filepath.Join(b.dir, "environments", b.env("api").ID, "env.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -197,8 +280,14 @@ func TestCompletionHelperPrintsTheEnvironments(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.fails(1, "list")
-	if code, stdout, stderr := b.run("__complete", "envs"); code != 0 || stdout != "" || stderr != "" {
-		t.Errorf("unloadable configuration: exit %d, %q, %q", code, stdout, stderr)
+	for _, line := range [][]string{{"up", ""}, {"var", "unset", "web", ""}} {
+		if code, stdout, stderr := b.run(append([]string{"__complete", "--"}, line...)...); code != 0 || stdout != "" || stderr != "" {
+			t.Errorf("unloadable configuration, %q: exit %d, %q, %q", line, code, stdout, stderr)
+		}
+	}
+	// The commands themselves need no configuration.
+	if got := b.completes("to"); !slices.Equal(got, []string{"token"}) {
+		t.Errorf("commands with an unloadable configuration: %q", got)
 	}
 }
 
@@ -224,5 +313,37 @@ func TestCompletionScriptsParse(t *testing.T) {
 				t.Errorf("%s does not accept the script: %v\n%s", shell, err, out)
 			}
 		})
+	}
+}
+
+// The bash script, run: it hands bh the words up to the cursor — an empty
+// one included — and offers the names bh answers with, descriptions cut.
+func TestBashScriptCarriesTheLineAndTheAnswer(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is not installed")
+	}
+	dir := t.TempDir()
+	// A bh that records what it was asked and answers two candidates.
+	fake := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"" + filepath.Join(dir, "asked") + "\"\nprintf 'push\\talso push and more\\ncontribute\\n'\n"
+	if err := os.WriteFile(filepath.Join(dir, "bh"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script, _ := completionScript("bash")
+	// A bash that is not built for a terminal has no completion builtins;
+	// the script only needs them to register itself.
+	script = "complete() { :; }\ncompopt() { :; }\n" + script
+	run := exec.Command(bash, "-c", script+"\nCOMP_WORDS=(bh token set web github '' later); COMP_CWORD=5; _bh; printf '%s\\n' \"${COMPREPLY[@]}\"")
+	run.Env = []string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")}
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if string(out) != "push\ncontribute\n" {
+		t.Errorf("offered:\n%s", out)
+	}
+	asked, err := os.ReadFile(filepath.Join(dir, "asked"))
+	if err != nil || string(asked) != "__complete\n--\ntoken\nset\nweb\ngithub\n\n" {
+		t.Errorf("bh was asked %q (%v)", asked, err)
 	}
 }

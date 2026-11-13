@@ -3,7 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
+
+	"github.com/ys319/bulkhead/internal/config"
+	"github.com/ys319/bulkhead/internal/snapshot"
 )
 
 // `bh completion zsh|bash` prints a completion script for the shell's rc
@@ -11,137 +16,476 @@ import (
 // stale with the next bh, a script made by the binary that is in PATH
 // cannot.
 //
-// The words come from the tables below. The commands themselves are the
-// map in main.go; a command added there is added here too (the tests hold
-// the two against each other).
+// The script is only a way in. What to offer is decided here, by the
+// program itself: the shell hands the command line as typed so far to
+// `bh __complete`, and bh answers with the candidates for the word under
+// the cursor — from the table below and from the configuration directory
+// (the environments, their variables, snapshots, tokens). Completion is
+// how arguments are chosen: bh does not ask for what was left out
+// (decided 2026-11-13).
+//
+// The commands themselves are the map in main.go; a command added there
+// is added here too (the tests hold the two against each other).
 
-// Which environments a word on the command line names; "" is none.
-const (
-	envsAll    = "all"
-	envsLocal  = "local"
-	envsRemote = "remote"
+// candidate is a word to offer, with what the shell shows next to it.
+type candidate struct{ name, about string }
+
+// completing is what a position's candidates can depend on.
+type completing struct {
+	a *app
+	// given are the positional words before the cursor, after the command
+	// and its subcommand: given[0] is usually the environment.
+	given []string
+}
+
+// argument makes the candidates for one position. nil stands for a
+// position where anything goes (a new name, a value).
+type argument func(c *completing) []candidate
+
+// fileNames stands for "a file's name": the shell completes those itself.
+var fileNamesMark = []candidate{{name: "\x00files"}}
+
+func fileNames(*completing) []candidate { return fileNamesMark }
+
+func oneOf(list ...string) argument {
+	return func(*completing) []candidate {
+		out := make([]candidate, len(list))
+		for i, word := range list {
+			out[i] = candidate{name: word}
+		}
+		return out
+	}
+}
+
+// environments are the names of the environments that pass.
+func environments(pass func(config.Environment) bool) argument {
+	return func(c *completing) []candidate {
+		_, cfg, err := c.a.load()
+		if err != nil {
+			return nil
+		}
+		var out []candidate
+		for _, env := range cfg.Envs {
+			if pass(env) {
+				about := ""
+				switch {
+				case !env.Local():
+					about = "remote"
+				case env.Archived != "":
+					about = "archived"
+				}
+				out = append(out, candidate{env.Name, about})
+			}
+		}
+		return out
+	}
+}
+
+var (
+	anyEnvs      = environments(func(config.Environment) bool { return true })
+	localEnvs    = environments(config.Environment.Local)
+	remoteEnvs   = environments(func(env config.Environment) bool { return !env.Local() })
+	awakeEnvs    = environments(func(env config.Environment) bool { return env.Local() && env.Archived == "" })
+	archivedEnvs = environments(func(env config.Environment) bool { return env.Archived != "" })
 )
 
-// completedWord is a subcommand (or a fixed argument) with what the shell
-// shows next to it. envs is what the argument after it names.
+// of looks the environment named first up; false when it is not there.
+func (c *completing) of() (config.Store, config.Environment, bool) {
+	if len(c.given) == 0 {
+		return config.Store{}, config.Environment{}, false
+	}
+	store, cfg, err := c.a.load()
+	if err != nil {
+		return store, config.Environment{}, false
+	}
+	env, err := cfg.Find(c.given[0])
+	return store, env, err == nil
+}
+
+func variableNames(c *completing) []candidate {
+	_, env, found := c.of()
+	if !found {
+		return nil
+	}
+	names := make([]string, 0, len(env.Vars))
+	for name := range env.Vars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]candidate, len(names))
+	for i, name := range names {
+		out[i] = candidate{name: name}
+	}
+	return out
+}
+
+// Records only, and only today's: completing reads no value and takes
+// nothing over.
+func secretNames(c *completing) []candidate {
+	store, env, found := c.of()
+	if !found {
+		return nil
+	}
+	secrets, err := store.LoadSecrets(env.ID)
+	if err != nil {
+		return nil
+	}
+	out := make([]candidate, len(secrets))
+	for i, secret := range secrets {
+		out[i] = candidate{name: secret.Name}
+	}
+	return out
+}
+
+// serviceWords are the services a token can be had from.
+func serviceWords(*completing) []candidate {
+	out := make([]candidate, len(tokenServices))
+	for i, service := range tokenServices {
+		out[i] = candidate{service.Name, service.Title}
+	}
+	return out
+}
+
+// presetWords are the presets of the service named second; none for a
+// service without them.
+func presetWords(c *completing) []candidate {
+	if len(c.given) < 2 {
+		return nil
+	}
+	service, known := serviceNamed(c.given[1])
+	if !known {
+		return nil
+	}
+	out := make([]candidate, len(service.Presets))
+	for i, preset := range service.Presets {
+		out[i] = candidate{preset.Name, preset.About}
+	}
+	return out
+}
+
+// heldTokens are the services the environment has a token of.
+func heldTokens(c *completing) []candidate {
+	store, env, found := c.of()
+	if !found {
+		return nil
+	}
+	tokens, err := store.LoadTokens(env.ID)
+	if err != nil {
+		return nil
+	}
+	out := make([]candidate, len(tokens))
+	for i, token := range tokens {
+		out[i] = candidate{token.Service, tokenSummary(token, c.a.now())}
+	}
+	return out
+}
+
+// snapshotNames are the environment's snapshots, newest first; with
+// latest, that word leads.
+func snapshotNames(latest bool) argument {
+	return func(c *completing) []candidate {
+		store, env, found := c.of()
+		if !found {
+			return nil
+		}
+		list, err := listSnapshots(store, env.ID)
+		if err != nil {
+			return nil
+		}
+		var out []candidate
+		if latest && len(list) > 0 {
+			out = append(out, candidate{"latest", "the newest snapshot"})
+		}
+		for _, s := range slices.Backward(list) {
+			about := ""
+			if s.Err == nil {
+				about = s.Manifest.Kind
+				if s.Manifest.Note != "" {
+					about += " — " + s.Manifest.Note
+				}
+			}
+			out = append(out, candidate{strings.TrimSuffix(s.Name, snapshot.Extension), about})
+		}
+		return out
+	}
+}
+
+// keyNames are the registered keys by label (a key without one, or with a
+// label a shell would split, by its fingerprint); with attached, only
+// those the environment lets in.
+func keyNames(attached bool) argument {
+	return func(c *completing) []candidate {
+		store, err := c.a.store()
+		if err != nil {
+			return nil
+		}
+		registry, err := store.LoadKeys()
+		if err != nil {
+			return nil
+		}
+		var allowed []string
+		if attached {
+			_, env, found := c.of()
+			if !found {
+				return nil
+			}
+			allowed = env.AuthorizedKeys
+		}
+		var out []candidate
+		for _, key := range registry {
+			if attached && !slices.Contains(allowed, key.Fingerprint) {
+				continue
+			}
+			if key.Label != "" && !strings.ContainsAny(key.Label, " \t") {
+				out = append(out, candidate{key.Label, key.Fingerprint})
+			} else {
+				out = append(out, candidate{key.Fingerprint, key.Label})
+			}
+		}
+		return out
+	}
+}
+
+// flagSpec is a flag. takes is true for one that is followed by a value;
+// values makes the candidates for that value (nil: anything goes).
+type flagSpec struct {
+	name   string
+	takes  bool
+	values argument
+}
+
+func plain(name string) flagSpec { return flagSpec{name: name} }
+func valued(name string, values argument) flagSpec {
+	return flagSpec{name: name, takes: true, values: values}
+}
+
+var (
+	onOrOff    = oneOf("on", "off")
+	restarts   = oneOf("unless-stopped", "no")
+	yesFlag    = plain("--yes")
+	remoteFlag = []flagSpec{valued("--name", nil), valued("--host", nil), valued("--port", nil)}
+)
+
+// commandSpec is a command (or a subcommand) of bh as the completion
+// knows it.
 //
-// The descriptions go into zsh's 'name:description' and 'name[description]'
-// forms unquoted: no colon, apostrophe or square bracket in them.
-type completedWord struct {
+// The descriptions go into zsh's 'name:description' form: no colon in them.
+type commandSpec struct {
 	name, about string
-	envs        string
+	// args are the positions after the command, in order.
+	args  []argument
+	flags []flagSpec
+	// subs are the subcommands the first word is chosen from.
+	subs []commandSpec
 }
 
-// completedCommand is a command of bh as the completion knows it.
-type completedCommand struct {
-	name, about string
-	// envs is what the first argument names.
-	envs string
-	// flags are offered when the word under the cursor starts with a dash.
-	flags []string
-	// subs are the words the first argument is chosen from.
-	subs []completedWord
-}
-
-var completedCommands = []completedCommand{
-	{name: "create", about: "define a new environment", flags: []string{"--from", "--port", "--publish", "--restart"}},
-	{name: "configure", about: "change settings", envs: envsLocal,
-		flags: []string{"--publish", "--port", "--restart", "--gpu", "--cdi-devices", "--docker-socket"}},
-	{name: "rename", about: "give an environment another name", envs: envsAll},
-	{name: "up", about: "start, creating what is missing", envs: envsLocal},
-	{name: "down", about: "stop (--all for every local one)", envs: envsLocal, flags: []string{"--all"}},
-	{name: "restart", about: "stop, recreate both containers, start", envs: envsLocal,
-		flags: []string{"--rebuild", "--pull", "--no-cache"}},
+var completedCommands = []commandSpec{
+	{name: "create", about: "define a new environment", args: []argument{nil},
+		flags: []flagSpec{valued("--from", localEnvs), valued("--port", nil), plain("--publish"), valued("--restart", restarts)}},
+	{name: "configure", about: "change settings", args: []argument{localEnvs},
+		flags: []flagSpec{valued("--publish", onOrOff), valued("--port", nil), valued("--restart", restarts),
+			valued("--gpu", oneOf("off", "legacy", "cdi")), valued("--cdi-devices", nil), valued("--docker-socket", onOrOff)}},
+	{name: "rename", about: "give an environment another name", args: []argument{anyEnvs, nil}},
+	{name: "up", about: "start, creating what is missing", args: []argument{awakeEnvs}},
+	{name: "down", about: "stop (--all for every local one)", args: []argument{awakeEnvs}, flags: []flagSpec{plain("--all")}},
+	{name: "restart", about: "stop, recreate both containers, start", args: []argument{awakeEnvs},
+		flags: []flagSpec{plain("--rebuild"), plain("--pull"), plain("--no-cache")}},
 	{name: "list", about: "all environments and their state"},
-	{name: "status", about: "one environment in detail", envs: envsAll},
-	{name: "ssh", about: "open a shell, or run a command", envs: envsAll},
-	{name: "open", about: "open in VS Code", envs: envsAll},
-	{name: "key", about: "the machine key and other keys that may log in", flags: []string{"--label", "--yes"},
-		subs: []completedWord{
-			{name: "show", about: "print the public key of this machine"},
-			{name: "list", about: "the registered keys or those of an environment", envs: envsLocal},
-			{name: "add", about: "register a public key"},
-			{name: "rename", about: "change the label of a registered key"},
-			{name: "remove", about: "remove from the registry"},
-			{name: "attach", about: "let a key log in to an environment", envs: envsLocal},
-			{name: "detach", about: "take that back", envs: envsLocal},
-		}},
-	{name: "remote", about: "environments that run on another machine", flags: []string{"--name", "--host", "--port"},
-		subs: []completedWord{
-			{name: "add", about: "register a remote environment"},
-			{name: "configure", about: "change host or port", envs: envsRemote},
-			{name: "remove", about: "forget it (the other machine is not touched)", envs: envsRemote},
-		}},
-	{name: "logs", about: "follow the output of both containers", envs: envsLocal,
-		flags: []string{"--tail", "--no-follow", "--timestamps"}},
-	{name: "init", about: "run init.sh in the running environment", envs: envsLocal},
-	{name: "root-shell", about: "root shell in the running dev container", envs: envsLocal},
-	{name: "gpu", about: "the GPU devices of the engine",
-		subs: []completedWord{{name: "list", about: "list the CDI devices"}}},
-	{name: "var", about: "environment variables that are no secret",
-		subs: []completedWord{
-			{name: "list", about: "the variables of an environment", envs: envsLocal},
-			{name: "set", about: "set a variable", envs: envsLocal},
-			{name: "unset", about: "take a variable out", envs: envsLocal},
-		}},
-	{name: "secret", about: "secret values of yours, handed in as variables",
-		subs: []completedWord{
-			{name: "list", about: "the names of the secrets of an environment", envs: envsLocal},
-			{name: "set", about: "set a secret (the value is read hidden)", envs: envsLocal},
-			{name: "remove", about: "take a secret out", envs: envsLocal},
-			{name: "store", about: "where this machine keeps the values"},
-		}},
-	{name: "token", about: "credentials a service issues (GitHub, Hugging Face)",
-		flags: []string{"--owner", "--days", "--no-open", "--yes"},
-		subs: []completedWord{
-			{name: "list", about: "the tokens of an environment or of all", envs: envsLocal},
-			{name: "set", about: "get a token from a service", envs: envsLocal},
-			{name: "refresh", about: "the same token again with a new value", envs: envsLocal},
-			{name: "remove", about: "revoke a token and take it out", envs: envsLocal},
-		}},
-	{name: "doctor", about: "check this machine and the boundary of the containers", envs: envsLocal},
-	{name: "path", about: "print the configuration directory", envs: envsAll},
-	{name: "snapshot", about: "the data of an environment in one file", flags: []string{"--note"},
-		subs: []completedWord{
-			{name: "create", about: "take a snapshot of a stopped environment", envs: envsLocal},
-			{name: "list", about: "the snapshots of one environment or of all", envs: envsLocal},
-			{name: "remove", about: "delete a snapshot", envs: envsLocal},
-		}},
-	{name: "rollback", about: "put the data of a snapshot back", envs: envsLocal, flags: []string{"--only", "--no-snapshot", "--yes"}},
-	{name: "export", about: "write a snapshot to a file of your choosing", envs: envsLocal},
-	{name: "import", about: "make a new environment from a snapshot file"},
-	{name: "archive", about: "take a snapshot, then remove containers and volumes", envs: envsLocal, flags: []string{"--yes"}},
-	{name: "unarchive", about: "bring an archived environment back", envs: envsLocal},
-	{name: "reset", about: "take the tools back to the image, or the home directory too", envs: envsLocal, flags: []string{"--home", "--no-snapshot", "--yes"}},
-	{name: "destroy", about: "remove the environment and its data", envs: envsAll, flags: []string{"--yes"}},
-	{name: "migrate", about: "take over an environment of the TypeScript version", flags: []string{"--yes", "--undo"}},
+	{name: "status", about: "one environment in detail", args: []argument{anyEnvs}},
+	{name: "ssh", about: "open a shell, or run a command", args: []argument{anyEnvs}},
+	{name: "open", about: "open in VS Code", args: []argument{anyEnvs}},
+	{name: "key", about: "the machine key and other keys that may log in", subs: []commandSpec{
+		{name: "show", about: "print the public key of this machine"},
+		{name: "list", about: "the registered keys or those of an environment", args: []argument{localEnvs}},
+		{name: "add", about: "register a public key", flags: []flagSpec{valued("--label", nil)}},
+		{name: "rename", about: "change the label of a registered key", args: []argument{keyNames(false), nil}},
+		{name: "remove", about: "remove from the registry", args: []argument{keyNames(false)}, flags: []flagSpec{yesFlag}},
+		{name: "attach", about: "let a key log in to an environment", args: []argument{localEnvs, keyNames(false)}},
+		{name: "detach", about: "take that back", args: []argument{localEnvs, keyNames(true)}},
+	}},
+	{name: "remote", about: "environments that run on another machine", subs: []commandSpec{
+		{name: "add", about: "register a remote environment", args: []argument{nil}, flags: remoteFlag},
+		{name: "configure", about: "change host or port", args: []argument{remoteEnvs}, flags: remoteFlag},
+		{name: "remove", about: "forget it (the other machine is not touched)", args: []argument{remoteEnvs}},
+	}},
+	{name: "logs", about: "follow the output of both containers", args: []argument{awakeEnvs},
+		flags: []flagSpec{valued("--tail", nil), plain("--no-follow"), plain("--timestamps")}},
+	{name: "init", about: "run init.sh in the running environment", args: []argument{awakeEnvs}},
+	{name: "root-shell", about: "root shell in the running dev container", args: []argument{awakeEnvs}},
+	{name: "gpu", about: "the GPU devices of the engine", subs: []commandSpec{{name: "list", about: "list the CDI devices"}}},
+	{name: "var", about: "environment variables that are no secret", subs: []commandSpec{
+		{name: "list", about: "the variables of an environment", args: []argument{localEnvs}},
+		{name: "set", about: "set a variable", args: []argument{localEnvs, variableNames, nil}},
+		{name: "unset", about: "take a variable out", args: []argument{localEnvs, variableNames}},
+	}},
+	{name: "secret", about: "secret values of yours, handed in as variables", subs: []commandSpec{
+		{name: "list", about: "the names of the secrets of an environment", args: []argument{localEnvs}},
+		{name: "set", about: "set a secret (the value is read hidden)", args: []argument{awakeEnvs, secretNames}},
+		{name: "remove", about: "take a secret out", args: []argument{awakeEnvs, secretNames}},
+		{name: "store", about: "where this machine keeps the values", args: []argument{oneOf("keychain", "file")}},
+	}},
+	{name: "token", about: "credentials a service issues (GitHub, Hugging Face)", subs: []commandSpec{
+		{name: "list", about: "the tokens of an environment or of all", args: []argument{localEnvs}},
+		{name: "set", about: "get a token from a service", args: []argument{awakeEnvs, serviceWords, presetWords},
+			flags: []flagSpec{valued("--owner", nil), valued("--days", nil), plain("--no-open")}},
+		{name: "refresh", about: "the same token again with a new value", args: []argument{awakeEnvs, heldTokens},
+			flags: []flagSpec{plain("--no-open")}},
+		{name: "remove", about: "revoke a token and take it out", args: []argument{localEnvs, heldTokens}, flags: []flagSpec{yesFlag}},
+	}},
+	{name: "doctor", about: "check this machine and the boundary of the containers", args: []argument{localEnvs}},
+	{name: "path", about: "print the configuration directory", args: []argument{anyEnvs}},
+	{name: "snapshot", about: "the data of an environment in one file", subs: []commandSpec{
+		{name: "create", about: "take a snapshot of a stopped environment", args: []argument{awakeEnvs}, flags: []flagSpec{valued("--note", nil)}},
+		{name: "list", about: "the snapshots of one environment or of all", args: []argument{localEnvs}},
+		{name: "remove", about: "delete a snapshot", args: []argument{localEnvs, snapshotNames(false)}},
+	}},
+	{name: "rollback", about: "put the data of a snapshot back", args: []argument{awakeEnvs, snapshotNames(true)},
+		flags: []flagSpec{valued("--only", oneOf("workspace", "home")), plain("--no-snapshot"), yesFlag}},
+	{name: "export", about: "write a snapshot to a file of your choosing", args: []argument{awakeEnvs, fileNames}},
+	{name: "import", about: "make a new environment from a snapshot file", args: []argument{fileNames, nil}},
+	{name: "archive", about: "take a snapshot, then remove containers and volumes", args: []argument{awakeEnvs}, flags: []flagSpec{yesFlag}},
+	{name: "unarchive", about: "bring an archived environment back", args: []argument{archivedEnvs}},
+	{name: "reset", about: "take the tools back to the image, or the home directory too", args: []argument{awakeEnvs},
+		flags: []flagSpec{plain("--home"), plain("--no-snapshot"), yesFlag}},
+	{name: "destroy", about: "remove the environment and its data", args: []argument{anyEnvs}, flags: []flagSpec{yesFlag}},
+	{name: "migrate", about: "take over an environment of the TypeScript version", args: []argument{nil},
+		flags: []flagSpec{yesFlag, plain("--undo")}},
 	{name: "version", about: "the build, and the Docker Engine bh talks to"},
-	{name: "completion", about: "print a shell completion script",
-		subs: []completedWord{{name: "zsh"}, {name: "bash"}}},
+	{name: "completion", about: "print a shell completion script", args: []argument{oneOf("zsh", "bash")}},
 	{name: "help", about: "show usage"},
-}
-
-// What stands after a flag that takes one of a few values. --publish and
-// --docker-socket take on|off for configure only (create --publish takes
-// nothing); the scripts handle those two apart.
-var completedValues = []struct {
-	flag   string
-	values []string
-}{
-	{"--restart", []string{"unless-stopped", "no"}},
-	{"--gpu", []string{"off", "legacy", "cdi"}},
-	{"--preset", []string{"read", "push", "push+pr"}},
-}
-
-// tokenKinds stand after `bh token set <env>`.
-var tokenKinds = []completedWord{
-	{name: "hf", about: "Hugging Face (HF_TOKEN)"},
-	{name: "custom", about: "a variable you name"},
 }
 
 // topLevelFlags are offered for a dash where the command goes. The short
 // forms -V and -h work and are not offered: nobody completes two letters.
 var topLevelFlags = []string{"--version", "--help"}
+
+func specNamed(specs []commandSpec, name string) *commandSpec {
+	for i := range specs {
+		if specs[i].name == name {
+			return &specs[i]
+		}
+	}
+	return nil
+}
+
+func commandCandidates(specs []commandSpec) []candidate {
+	out := make([]candidate, len(specs))
+	for i, spec := range specs {
+		out[i] = candidate{spec.name, spec.about}
+	}
+	return out
+}
+
+// complete is what there is to offer for the last of the words — the one
+// under the cursor, as far as it is typed — given the ones before it.
+// Candidates that do not start with what is typed are left out.
+func (a *app) complete(line []string) []candidate {
+	if len(line) == 0 {
+		return nil
+	}
+	current, before := line[len(line)-1], line[:len(line)-1]
+	list := a.candidates(current, before)
+	if len(list) == 1 && list[0].name == fileNamesMark[0].name {
+		return list
+	}
+	var out []candidate
+	for _, entry := range list {
+		if strings.HasPrefix(entry.name, current) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func (a *app) candidates(current string, before []string) []candidate {
+	if len(before) == 0 {
+		if strings.HasPrefix(current, "-") {
+			return oneOf(topLevelFlags...)(nil)
+		}
+		return commandCandidates(completedCommands)
+	}
+	spec := specNamed(completedCommands, before[0])
+	if spec == nil {
+		return nil
+	}
+	rest := before[1:]
+	if len(spec.subs) > 0 {
+		if len(rest) == 0 {
+			return commandCandidates(spec.subs)
+		}
+		if spec = specNamed(spec.subs, rest[0]); spec == nil {
+			return nil
+		}
+		rest = rest[1:]
+	}
+
+	// The words before the cursor: flags (and the values they take) apart
+	// from the positions.
+	c := &completing{a: a}
+	var pending *flagSpec // a flag whose value is the word under the cursor
+	used := map[string]bool{}
+	for i := 0; i < len(rest); i++ {
+		word := rest[i]
+		if !strings.HasPrefix(word, "-") || word == "-" {
+			c.given = append(c.given, word)
+			continue
+		}
+		name, _, joined := strings.Cut(word, "=")
+		used[name] = true
+		at := slices.IndexFunc(spec.flags, func(f flagSpec) bool { return f.name == name })
+		if at < 0 || !spec.flags[at].takes || joined {
+			continue
+		}
+		if i == len(rest)-1 {
+			pending = &spec.flags[at]
+		}
+		i++ // its value
+	}
+	switch {
+	case pending != nil:
+		if pending.values == nil {
+			return nil
+		}
+		return pending.values(c)
+	case strings.HasPrefix(current, "-"):
+		var out []candidate
+		for _, f := range spec.flags {
+			if !used[f.name] {
+				out = append(out, candidate{name: f.name})
+			}
+		}
+		return out
+	case len(c.given) < len(spec.args) && spec.args[len(c.given)] != nil:
+		return spec.args[len(c.given)](c)
+	}
+	return nil
+}
+
+// completeLine is `bh __complete -- <words...>`: what the scripts call
+// while the user is typing. The words are the command line after "bh", up
+// to and including the one under the cursor (empty when the cursor is
+// after a space). It prints one candidate a line, "name<TAB>description",
+// or the single line "__files__" where a file's name goes. It answers from
+// the configuration directory alone — no Docker, no credential store, so
+// it is immediate — and on any problem it prints nothing: an error message
+// in the middle of a command line being typed helps nobody. It is not in
+// the usage text; it is the scripts' business.
+func (a *app) completeLine(_ context.Context, args []string) error {
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	for _, entry := range a.complete(args) {
+		switch {
+		case entry.name == fileNamesMark[0].name:
+			fmt.Fprintln(a.stdout, "__files__")
+		case entry.about == "":
+			fmt.Fprintln(a.stdout, entry.name)
+		default:
+			fmt.Fprintf(a.stdout, "%s\t%s\n", entry.name, strings.NewReplacer("\t", " ", "\n", " ").Replace(entry.about))
+		}
+	}
+	return nil
+}
 
 func (a *app) completion(_ context.Context, args []string) error {
 	if len(args) != 1 {
@@ -158,267 +502,62 @@ func (a *app) completion(_ context.Context, args []string) error {
 func completionScript(shell string) (string, error) {
 	switch shell {
 	case "zsh":
-		return zshCompletion(), nil
+		return zshCompletion, nil
 	case "bash":
-		return bashCompletion(), nil
+		return bashCompletion, nil
 	}
 	return "", usagef("completion: %q is not a supported shell (zsh, bash)", shell)
 }
 
-// completeNames is `bh __complete envs [local|remote]`: what the scripts
-// call while the user is typing, to get the names of the environments. It
-// answers from the configuration directory alone — no Docker, so it is
-// immediate — and on any problem it prints nothing: an error message in
-// the middle of a command line being typed helps nobody. It is not in the
-// usage text; it is the scripts' business.
-func (a *app) completeNames(_ context.Context, args []string) error {
-	if len(args) == 0 || args[0] != "envs" {
-		return nil
-	}
-	kind := envsAll
-	if len(args) > 1 {
-		kind = args[1]
-	}
-	_, cfg, err := a.load()
-	if err != nil {
-		return nil
-	}
-	for _, env := range cfg.Envs {
-		if (kind == envsLocal && !env.Local()) || (kind == envsRemote && env.Local()) {
-			continue
-		}
-		fmt.Fprintln(a.stdout, env.Name)
-	}
-	return nil
+// The scripts only carry the command line to bh and its answer back. zsh
+// shows the descriptions; bash has no place for them.
+const zshCompletion = `# bh completion (zsh) — add to your ~/.zshrc:
+#   eval "$(bh completion zsh)"
+
+_bh() {
+  local -a lines described bare
+  local line name
+  lines=("${(@f)$(command bh __complete -- "${(@)words[2,CURRENT]}" 2>/dev/null)}")
+  if [[ ${lines[1]} == __files__ ]]; then
+    _files
+    return
+  fi
+  for line in $lines; do
+    [[ -n $line ]] || continue
+    if [[ $line == *$'\t'* ]]; then
+      name=${line%%$'\t'*}
+      described+=("${name//:/\\:}:${line#*$'\t'}")
+    else
+      bare+=("$line")
+    fi
+  done
+  # -V: in the order bh gave them (presets go from the least to the most).
+  (( ${#described} )) && _describe -V -t values 'bh' described
+  (( ${#bare} )) && compadd -V values -- $bare
+  (( ${#described} + ${#bare} ))
 }
 
-// commandsNaming are the commands whose first argument names an
-// environment of the kind, as a shell pattern: "up|down|restart".
-func commandsNaming(kind string) string {
-	var names []string
-	for _, command := range completedCommands {
-		if command.envs == kind {
-			names = append(names, command.name)
-		}
-	}
-	return strings.Join(names, "|")
+compdef _bh bh
+`
+
+const bashCompletion = `# bh completion (bash) — add to your ~/.bashrc:
+#   eval "$(bh completion bash)"
+
+_bh() {
+  local IFS=$'\n'
+  local -a lines
+  lines=($(command bh __complete -- "${COMP_WORDS[@]:1:COMP_CWORD}" 2>/dev/null))
+  COMPREPLY=()
+  if [[ ${lines[0]} == __files__ ]]; then
+    compopt -o filenames 2>/dev/null
+    COMPREPLY=($(compgen -f -- "${COMP_WORDS[COMP_CWORD]}"))
+    return
+  fi
+  local line
+  for line in "${lines[@]}"; do
+    COMPREPLY+=("${line%%$'\t'*}")
+  done
 }
 
-// subsNaming are the subcommands of a command whose argument names an
-// environment, as shell patterns by kind of environment.
-func subsNaming(command completedCommand) (cases []struct{ pattern, kind string }) {
-	for _, kind := range envKinds {
-		var names []string
-		for _, sub := range command.subs {
-			if sub.envs == kind {
-				names = append(names, sub.name)
-			}
-		}
-		if len(names) > 0 {
-			cases = append(cases, struct{ pattern, kind string }{strings.Join(names, "|"), kind})
-		}
-	}
-	return cases
-}
-
-func wordNames(words []completedWord) string {
-	list := make([]string, len(words))
-	for i, word := range words {
-		list[i] = word.name
-	}
-	return strings.Join(list, " ")
-}
-
-// zshValues is the argument list of _values: 'name[description]'.
-func zshValues(words []completedWord) string {
-	list := make([]string, len(words))
-	for i, word := range words {
-		if word.about == "" {
-			list[i] = word.name
-		} else {
-			list[i] = "'" + word.name + "[" + word.about + "]'"
-		}
-	}
-	return strings.Join(list, " ")
-}
-
-var envKinds = []string{envsAll, envsLocal, envsRemote}
-
-func zshCompletion() string {
-	var b strings.Builder
-	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-
-	line(`# bh completion (zsh) — add to your ~/.zshrc:`)
-	line(`#   eval "$(bh completion zsh)"`)
-	line(``)
-	line(`_bh_envs() {`)
-	line(`  local -a names`)
-	line(`  names=(${(f)"$(command bh __complete envs $1 2>/dev/null)"})`)
-	line(`  (( ${#names} )) && _describe -t environments 'environment' names`)
-	line(`}`)
-	line(``)
-	line(`_bh() {`)
-	line(`  local -a commands=(`)
-	for _, command := range completedCommands {
-		line(`    '%s:%s'`, command.name, command.about)
-	}
-	line(`  )`)
-	line(`  if (( CURRENT == 2 )); then`)
-	line(`    if [[ ${words[CURRENT]} == -* ]]; then`)
-	line(`      compadd -- %s`, strings.Join(topLevelFlags, " "))
-	line(`    else`)
-	line(`      _describe -t commands 'bh command' commands`)
-	line(`    fi`)
-	line(`    return`)
-	line(`  fi`)
-	line(`  local cmd=${words[2]}`)
-	line(`  case ${words[CURRENT-1]} in`)
-	line(`    --from) _bh_envs local; return ;;`)
-	for _, entry := range completedValues {
-		line(`    %s) compadd -- %s; return ;;`, entry.flag, strings.Join(entry.values, " "))
-	}
-	line(`    --publish|--docker-socket)`)
-	line(`      if [[ $cmd == configure ]]; then`)
-	line(`        compadd -- on off`)
-	line(`        return`)
-	line(`      fi`)
-	line(`      ;;`)
-	line(`  esac`)
-	line(`  if [[ ${words[CURRENT]} == -* ]]; then`)
-	line(`    case $cmd in`)
-	for _, command := range completedCommands {
-		if len(command.flags) > 0 {
-			line(`      %s) compadd -- %s ;;`, command.name, strings.Join(command.flags, " "))
-		}
-	}
-	line(`    esac`)
-	line(`    return`)
-	line(`  fi`)
-	line(`  case $cmd in`)
-	for _, kind := range envKinds {
-		if pattern := commandsNaming(kind); pattern != "" {
-			line(`    %s)`, pattern)
-			line(`      (( CURRENT == 3 )) && _bh_envs %s`, kind)
-			line(`      ;;`)
-		}
-	}
-	for _, command := range completedCommands {
-		if len(command.subs) == 0 {
-			continue
-		}
-		line(`    %s)`, command.name)
-		line(`      if (( CURRENT == 3 )); then`)
-		line(`        _values '%s command' %s`, command.name, zshValues(command.subs))
-		if cases := subsNaming(command); len(cases) > 0 {
-			line(`      elif (( CURRENT == 4 )); then`)
-			line(`        case ${words[3]} in`)
-			for _, entry := range cases {
-				line(`          %s) _bh_envs %s ;;`, entry.pattern, entry.kind)
-			}
-			line(`        esac`)
-		}
-		if command.name == "token" {
-			line(`      elif (( CURRENT == 5 )) && [[ ${words[3]} == set ]]; then`)
-			line(`        _values 'token kind' %s`, zshValues(tokenKinds))
-		}
-		line(`      fi`)
-		line(`      ;;`)
-	}
-	line(`  esac`)
-	line(`}`)
-	line(``)
-	line(`compdef _bh bh`)
-	return b.String()
-}
-
-func bashCompletion() string {
-	var b strings.Builder
-	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	commandNames := make([]string, len(completedCommands))
-	for i, command := range completedCommands {
-		commandNames[i] = command.name
-	}
-
-	line(`# bh completion (bash) — add to your ~/.bashrc:`)
-	line(`#   eval "$(bh completion bash)"`)
-	line(``)
-	line(`_bh_envs() {`)
-	line(`  command bh __complete envs "$1" 2>/dev/null`)
-	line(`}`)
-	line(``)
-	line(`_bh() {`)
-	line(`  local cur prev cmd`)
-	line(`  cur=${COMP_WORDS[COMP_CWORD]}`)
-	line(`  prev=${COMP_WORDS[COMP_CWORD-1]}`)
-	line(`  cmd=${COMP_WORDS[1]}`)
-	line(`  COMPREPLY=()`)
-	line(`  if (( COMP_CWORD == 1 )); then`)
-	line(`    if [[ $cur == -* ]]; then`)
-	line(`      COMPREPLY=($(compgen -W "%s" -- "$cur"))`, strings.Join(topLevelFlags, " "))
-	line(`    else`)
-	line(`      COMPREPLY=($(compgen -W "%s" -- "$cur"))`, strings.Join(commandNames, " "))
-	line(`    fi`)
-	line(`    return`)
-	line(`  fi`)
-	line(`  case $prev in`)
-	line(`    --from) COMPREPLY=($(compgen -W "$(_bh_envs local)" -- "$cur")); return ;;`)
-	for _, entry := range completedValues {
-		line(`    %s) COMPREPLY=($(compgen -W "%s" -- "$cur")); return ;;`, entry.flag, strings.Join(entry.values, " "))
-	}
-	line(`    --publish|--docker-socket)`)
-	line(`      if [[ $cmd == configure ]]; then`)
-	line(`        COMPREPLY=($(compgen -W "on off" -- "$cur"))`)
-	line(`        return`)
-	line(`      fi`)
-	line(`      ;;`)
-	line(`  esac`)
-	line(`  if [[ $cur == -* ]]; then`)
-	line(`    local flags=""`)
-	line(`    case $cmd in`)
-	for _, command := range completedCommands {
-		if len(command.flags) > 0 {
-			line(`      %s) flags="%s" ;;`, command.name, strings.Join(command.flags, " "))
-		}
-	}
-	line(`    esac`)
-	line(`    COMPREPLY=($(compgen -W "$flags" -- "$cur"))`)
-	line(`    return`)
-	line(`  fi`)
-	line(`  case $cmd in`)
-	for _, kind := range envKinds {
-		if pattern := commandsNaming(kind); pattern != "" {
-			line(`    %s)`, pattern)
-			line(`      if (( COMP_CWORD == 2 )); then`)
-			line(`        COMPREPLY=($(compgen -W "$(_bh_envs %s)" -- "$cur"))`, kind)
-			line(`      fi`)
-			line(`      ;;`)
-		}
-	}
-	for _, command := range completedCommands {
-		if len(command.subs) == 0 {
-			continue
-		}
-		line(`    %s)`, command.name)
-		line(`      if (( COMP_CWORD == 2 )); then`)
-		line(`        COMPREPLY=($(compgen -W "%s" -- "$cur"))`, wordNames(command.subs))
-		if cases := subsNaming(command); len(cases) > 0 {
-			line(`      elif (( COMP_CWORD == 3 )); then`)
-			line(`        case ${COMP_WORDS[2]} in`)
-			for _, entry := range cases {
-				line(`          %s) COMPREPLY=($(compgen -W "$(_bh_envs %s)" -- "$cur")) ;;`, entry.pattern, entry.kind)
-			}
-			line(`        esac`)
-		}
-		if command.name == "token" {
-			line(`      elif (( COMP_CWORD == 4 )) && [[ ${COMP_WORDS[2]} == set ]]; then`)
-			line(`        COMPREPLY=($(compgen -W "%s" -- "$cur"))`, wordNames(tokenKinds))
-		}
-		line(`      fi`)
-		line(`      ;;`)
-	}
-	line(`  esac`)
-	line(`}`)
-	line(``)
-	line(`complete -F _bh bh`)
-	return b.String()
-}
+complete -F _bh bh
+`

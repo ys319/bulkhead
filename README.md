@@ -65,11 +65,13 @@ bh down web      # 止める（コンテナとデータは残る）
 ```
 bh var set web NODE_ENV development     # 秘密でない変数。値は表示され、設定と一緒に複製される
 bh secret set web OPENAI_API_KEY        # 自分が持っている秘密の値。入力は表示されない
-bh token set web                        # サービスが発行する資格情報（GitHub / Hugging Face）
+bh token set web github push            # サービスが発行する資格情報（GitHub / Hugging Face）
 ```
 
-`bh token set` は、足りない引数を順に聞く（環境 → サービス → プリセット）。GitHub は
-`read` / `push` / `contribute` から何を許すかを選び、発行ページが項目入りで開く。期限が近づいたら
+token は `bh token set web github push` のように、環境・サービス・プリセットを続けて書く。
+GitHub のプリセットは `read` / `push` / `contribute` で、発行ページが項目入りで開く。何が選べるかは
+補完が出す（`eval "$(bh completion zsh)"` — サービス、プリセットとその意味、環境の持つ変数名や
+スナップショットの名前まで）。期限が近づいたら
 `bh token refresh web` で、同じトークンを再発行して貼り直す。`bh token remove` は失効もさせる。
 
 secret と token の値は、OS の資格情報ストア（macOS のキーチェーンなど）に入り、設定ディレクトリの
