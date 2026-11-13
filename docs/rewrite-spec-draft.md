@@ -216,21 +216,152 @@ TS 版は経路が4つある（環境変数 `SSH_AUTHORIZED_KEYS`・init.sh の 
   起動していないコンテナへ API でアーカイブを送る方法（プロセスを動かさずに済む）は**要スパイク**。
 - sshd の StrictModes が volume 上の authorized_keys を受け付けるかは**要実機確認**。
 
-## 7. 環境変数とシークレット
+## 7. 環境へ渡す値: var / secret / token
 
-決定 2026-11-12 の方針（2つのメニューに分ける）に沿った案:
+**案（2026-11-13、確認待ち — まだ実装していない）。** 方針はユーザー: 「secret にトークンの発行が
+入るのは違う。secret と token は分ける。var・secret・token は別々の意味を持つので、3つの意味・
+3つの経路として成立する」。前の案（GitHub をシークレットのサービスの1つにする）は採らない。
+受け渡しの一本化（§6）は後に回す（決定 2026-11-13）— この節は今のボリューム2つの上で成り立つ。
 
-| | 環境変数 | シークレット |
+### 3つの意味
+
+| | var | secret | token |
+| --- | --- | --- | --- |
+| 何か | 秘密でない環境変数 | 利用者が持っている秘密の値 | サービスが**この環境のために発行する**資格情報 |
+| bh が知っていること | 名前と値 | 名前と値 | サービスごとの、発行のしかた・確かめ方・期限・更新・失効 |
+| 操作 | `set` / `unset` / `list` | `set` / `remove` / `list` | `add` / `refresh` / `remove` / `list` |
+| 置き場所 | env.json（`create --from` の複製に乗る） | `secrets.json`（0600。複製にもスナップショットにも乗らない） | `tokens.json`（0600。同じく乗らない） |
+| 値の表示 | する | しない | しない |
+| destroy / archive | 設定と一緒に消える | 消える | 失効させられるサービスは失効させる |
+
+環境の中へは、3つとも**環境変数**として届く（新しいシェルから。動いているシェルは古い値の
+まま）。token はそれに加えて、サービスごとの受け口を持つ（GitHub は git の credential helper）。
+
+- 名前は1つの経路でしか定義できない。token が出す変数名（`GH_TOKEN` など）は var / secret には
+  使えず、var にある名前は secret には使えない（逆も）。
+- 値は1行（改行と制御文字は不可）。空白や記号は使える（今の「空白と `'` は不可」は、環境の中で
+  読む側の引用を直してなくす）。
+
+### コマンド
+
+```
+bh var list <env>
+bh var set <env> <KEY> <VALUE>
+bh var unset <env> <KEY>
+
+bh secret list <env>                  # 名前だけ
+bh secret set <env> <NAME>            # 値は端末なら非表示で入力、そうでなければ標準入力
+bh secret remove <env> <NAME>
+
+bh token list [<env>]                 # サービス・プリセット・対象・期限
+bh token add [<env>] [<service>] [<preset>] [--owner …] [--days …] [--no-open]
+bh token refresh [<env>] [<service>]
+bh token remove [<env>] [<service>] [--yes]
+```
+
+**引数は「順番に決めること」で、足りない分は対話で聞く**（方針、ユーザー）。`bh token add` なら
+環境 → サービス → プリセットの順。端末で実行して途中から省くと、省いたところから選ばせる
+（`bh token add web` はサービスから、`bh token add` は環境から）。端末でなければ、足りない引数を
+名指しして使い方のエラーにする。この決まりはほかのコマンドにも広げる（後から。いまは環境名だけ
+選べる）。
+
+- `add`: 発行ページを開く（入れられる項目は埋めておく）→ 利用者が発行して貼る → サービスに
+  問い合わせて確かめる → 分かったこと（持ち主・対象・期限）を見せる → 記録して環境へ入れる。
+  その環境に同じサービスの token がすでにあれば、置き換えるかを聞き、入れ替えた後で前のものを
+  失効させる。環境ごと・サービスごとに1本。
+- `refresh`: **記録にある指定（プリセット・持ち主・期限）のまま、新しい値にする。** サービスの
+  ページで再発行して貼る。貼られたものを確かめ、前の記録と違うところ（持ち主・対象）があれば
+  示す。前の値がまだ生きていれば失効させる。
+- `remove`: 環境から外し、失効させられるサービスは失効させる。できないサービスは、どこで消すかを
+  示す。
+- `list`: 期限が近い（7日以内）・切れたものを示す。doctor と TUI も同じものを warn にする。
+
+### プリセット
+
+決まり:
+
+1. プリセットは「このトークンで、環境の中のコードが外に対して何をできるようになるか」の名前。
+   できることのうち一番遠くまで届く行為で呼ぶ。
+2. 1語。サービスの中では小さい順に積み上がる（後ろは前を含む）。
+3. `read` はどのサービスでも「読むことしかできない」。その先は、そのサービスでの行為の名前。
+4. **環境が自分の権限を広げられるもの・ほかの秘密に届くものは、どのプリセットにも入れない。**
+   足したいときは、利用者が発行ページで自分の判断で足す。
+5. 既定値は無い。選ぶ画面では、プリセットごとに「何が起きうるか」を1行で見せる。
+6. bh が記録するプリセットは「頼んだもの」。実際の対象や期限は、確かめて分かった範囲で別に記録し、
+   表示する。
+
+**GitHub**（`github`。fine-grained の個人アクセストークン。変数 `GH_TOKEN` と git の credential
+helper）
+
+| プリセット | 発行ページに入れる権限 | 環境の中からできること |
 | --- | --- | --- |
-| 中身 | KEY / VALUE + コメント | サービス / VALUE + ユーザー名・コメント |
-| 置き場所 | env.json（秘密ではない。複製・export に乗る） | `environments/<id>/secrets.json`（0600。複製・export に乗らない） |
-| CLI | `bh var list / set / unset <env>` | `bh secret list / set / remove <env>` |
-| ゲストへ | inject の `env` | inject の `env`（+ サービスごとの追加ファイル） |
+| `read` | Contents: read | 非公開リポジトリの clone / fetch |
+| `push` | Contents: write | 加えて、コミット・ブランチ・タグの push。保護されていないブランチの書き換えと削除もできる |
+| `pr` | Contents: write、Pull requests: write、Actions: read、Commit statuses: read | 加えて、プルリクエストの作成・更新・コメントと、CI の結果とログを読むこと |
 
-GitHub は**シークレットのサービスの1つ**にまとめる（案）。サービスごとに持てる追加の能力を
-決めておき、GitHub だけが全部を持つ: 発行画面の誘導（テンプレート URL）・検証（持ち主・期限・
-リポジトリ）・失効（destroy / 置き換え時）・git の credential helper。Hugging Face は発行画面の
-誘導だけ、custom は何も持たない。保護ではないこと（threat-model）は変わらない。
+- TS 版の `push+pr` は `pr` に読み替える（移行で変換）。`pr` に CI の読み取り（Actions: read /
+  Commit statuses: read）を足すのは新しい — 「push して PR を出して CI を見て直す」が一続きで
+  できるようにするため。読むだけの権限。**（要確認）**
+- どれにも入れない: Workflows（CI から秘密を持ち出せる）、Secrets、Administration、Webhooks。
+- Issues は入れていない（PR へのコメントは Pull requests: write で足りる）。
+- リポジトリの選択はページで利用者が行う（URL では埋められない — 公式文書で確認）。持ち主は1つ
+  （`--owner`、対話では「自分のアカウント」を既定にして聞く）。期限の既定は30日（`--days`）。
+- 確かめ方・失効は今のまま（API で持ち主・期限・リポジトリを読む / `POST /credentials/revoke`）。
+- `refresh`: トークンの一覧ページを開いて「`bh-<env>-…` を Regenerate して貼る」と案内し、
+  新しく作る場合のページ（同じ指定で埋めたもの）の場所も示す。**Regenerate が fine-grained で
+  リポジトリの選択を保つかは、公式文書に記載が無く未確認。**
+
+**Hugging Face**（`huggingface`、短く `hf`。変数 `HF_TOKEN`）
+
+| プリセット | Hugging Face 側の種類 | 環境の中からできること |
+| --- | --- | --- |
+| `read` | read | 自分が読める非公開・gated のモデルやデータセットの取得、推論の呼び出し |
+| `write` | write | 加えて、自分が書けるリポジトリの作成と push |
+
+- 発行ページを項目入りで開く方法は、公式文書に見当たらない。トークンのページを開き、種類は
+  利用者が選ぶ。貼られたトークンの種類を API で読み、頼んだプリセットと違えば示す。
+- fine-grained（リポジトリ単位に絞る）は、ページで利用者が設計する。組織が fine-grained だけを
+  認めている場合に要る。プリセットとしては `read` / `write` のどちらに当たるかを選んでもらう。
+- 期限は無い。失効は API でできる（`POST /api/credentials/revoke`、認証不要 — 公式文書で確認）。
+  いまの bh は Hugging Face を失効させていないので、できるようになる。
+- `refresh`: ページの Manage → refresh で再発行して貼る。
+
+**Cloudflare**（`cloudflare`。変数 `CLOUDFLARE_API_TOKEN`）
+
+- 発行ページは項目入りで開ける（`permissionGroupKeys`・名前・アカウントとゾーンの範囲 — 公式文書で
+  確認）。確かめ方は検証用の API（状態と期限）。
+- 失効は、そのトークン自身ではできない（トークン管理の権限が要り、それは入れない）。`remove` は
+  ダッシュボードの場所を示す。`refresh` はダッシュボードの Roll。
+- **プリセットは用途を聞いてから決める（未決）。** 候補: `read`（読むだけ）/ `deploy`（wrangler
+  でのデプロイに要るもの — Workers・Pages・KV・R2 など）/ `dns`（DNS レコードの編集）。
+- アカウント ID（`CLOUDFLARE_ACCOUNT_ID`）は秘密ではないので var で渡す。
+
+### サービスを足すときに決めること
+
+サービスは1か所の定義にまとめる: 名前（と短い別名）/ プリセットと、それぞれが何を許すか /
+発行ページ（埋められる項目と、利用者が選ぶもの）/ 確かめ方と、そこから分かること / 出す変数名と
+受け口 / 更新のしかた / 失効のしかた（API か手作業か）/ 期限の既定。
+
+### 記録と移行
+
+- env.json に `vars`。`secrets.json` と `tokens.json` は環境のディレクトリ（どちらも 0600。
+  ビルドコンテキストには入れない）。
+- いまの `github.json` と `tokens.json`（TS 版の形）は読み替える: GitHub → token `github`、
+  種類 `hf` → token `huggingface`（プリセットは不明として記録し、次の `refresh` で決める）、
+  種類 `custom` → secret。`bh migrate` も、すでに bh にある環境も、同じ読み替えを通す。
+- 環境の中の置き場（ボリューム2つ）と、起動前に記録から書き直すことは今のまま。
+
+### TUI
+
+Settings → Variables / Secrets / Tokens の3つ。Tokens は Add（サービス → プリセットを選ぶ）・
+Refresh・Remove と、期限の表示。
+
+### まだ決めていないこと
+
+- GitHub の `pr` に CI の読み取りを含めるか。Issues を入れるか。
+- Cloudflare のプリセット（用途しだい）。
+- GitHub の Regenerate の挙動（未確認）。
+- 引数の名前（`<env>` のままか）。
 
 ## 8. データの退避（スナップショット）
 
@@ -382,7 +513,7 @@ home と nix 以外を渡されると断る）、**ボリュームの中身を�
 | （なし） | `rename <env> <new>` | 新規 |
 | `remote add / configure / remove` | 同じ | 登録の管理だけ残す |
 | `remote list / status / ssh / open` | `list --all` / `status` / `ssh` / `open` | local と同じコマンドで扱う |
-| `github ...` / `token ...` | `secret ...` / `var ...` | §7 |
+| `github ...` / `token ...` | `token ...` / `secret ...` / `var ...` | §7（案） |
 | `backup` / `restore` | `snapshot ...` | §8 |
 | `export` / `import` | 同じ | 形式は版上げ |
 | `compose` | 廃止 | §5 |
