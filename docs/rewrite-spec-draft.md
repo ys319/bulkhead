@@ -218,7 +218,7 @@ TS 版は経路が4つある（環境変数 `SSH_AUTHORIZED_KEYS`・init.sh の 
 
 ## 7. 環境へ渡す値: var / secret / token
 
-**案（2026-11-13、確認待ち — まだ実装していない）。** 方針はユーザー: 「secret にトークンの発行が
+**決定と実装（2026-11-13。実機では未確認 — §13）。** 方針はユーザー: 「secret にトークンの発行が
 入るのは違う。secret と token は分ける。var・secret・token は別々の意味を持つので、3つの意味・
 3つの経路として成立する」。前の案（GitHub をシークレットのサービスの1つにする）は採らない。
 受け渡しの一本化（§6）は後に回す（決定 2026-11-13）— この節は今のボリューム2つの上で成り立つ。
@@ -882,6 +882,9 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | 対象 | 確かめること |
 | --- | --- |
 | 上の修正 (手) | `bh open` が新しいウィンドウを開く / TUI の Logs から Ctrl-C で TUI へ戻る / 失敗した ssh の後で Enter を待つ / `HostKeyAlias` つきの項目で VS Code Remote SSH がつながる / メニューの幅 / 下段の並び（メッセージ → 操作説明） |
+| var / secret | `scripts/verify-features.sh` の「variables and secrets」の節: 空白・引用符・`$` を含む値がそのまま新しいシェルに届く、小文字の名前、secret の値が記録に残らない、外すと消える。**環境の中で値を読む側（bh-guest の引用）を変えたので、dev イメージが作り直される** |
+| 資格情報ストア (手) | `BH_VERIFY_KEYCHAIN=1 scripts/verify-features.sh <bh>` — 自分のキーチェーンに値を1つ入れて出す（既定では走らない）。macOS のキーチェーンで、値がファイルに残らず、`bh restart` で読み戻せ、消すと項目が無くなること。ssh 越しなど使えない場所で「ファイルにする」案内が出ること。Windows・Linux は未確認 |
+| token (手) | 本物のトークンで: `bh token set`（対話で環境 → サービス → プリセット → 持ち主）、GitHub の3つのプリセットで発行ページに入る権限、`bh token refresh`（Regenerate して貼る）、`bh token remove` の失効、Hugging Face の種類の読み取りと失効（**Hugging Face の API は文書を読んだだけで、一度も呼んでいない**）、`gh run view --log` が `push` で通ること、期限が近いときの表示。前のビルドで設定したトークン（`github.json`）が読み替えられること |
 | GitHub トークン (手) | `revoke`、`destroy` 時の失効、git と gh から使えること。Windows のコンソールでの非表示入力 |
 | restart --rebuild (手) | `--pull --no-cache` で作り直され、コンテナが新しいイメージで起動する |
 | GPU (手・対応機のみ) | legacy / cdi の起動、`bh gpu list`、デバイスノードの gid |

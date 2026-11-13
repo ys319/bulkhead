@@ -58,6 +58,25 @@ bh down web      # 止める（コンテナとデータは残る）
 環境のデータは Docker のボリュームにあり、**消すのは `bh destroy` / `bh reset` / `bh archive`
 （ボリュームごと）と `bh rollback`（中身の入れ替え）だけ**。どれも確認を求める。
 
+## 環境へ渡す値
+
+3つの経路がある。どれも環境の中では環境変数になり、新しいシェルから効く。
+
+```
+bh var set web NODE_ENV development     # 秘密でない変数。値は表示され、設定と一緒に複製される
+bh secret set web OPENAI_API_KEY        # 自分が持っている秘密の値。入力は表示されない
+bh token set web                        # サービスが発行する資格情報（GitHub / Hugging Face）
+```
+
+`bh token set` は、足りない引数を順に聞く（環境 → サービス → プリセット）。GitHub は
+`read` / `push` / `contribute` から何を許すかを選び、発行ページが項目入りで開く。期限が近づいたら
+`bh token refresh web` で、同じトークンを再発行して貼り直す。`bh token remove` は失効もさせる。
+
+secret と token の値は、OS の資格情報ストア（macOS のキーチェーンなど）に入り、設定ディレクトリの
+ファイルには残らない。ストアが使えない場所（ssh 越しなど）では `bh secret store file` で、
+自分だけが読めるファイルに置く。渡した値は環境の中のコードすべてが読める — 守りになるのは、
+トークンに持たせる権限の範囲だけ。
+
 ## データを取っておく
 
 止めた環境の workspace と home を1つのファイル（スナップショット）にできる。

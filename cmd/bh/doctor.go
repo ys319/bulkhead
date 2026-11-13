@@ -127,7 +127,28 @@ func checkEnvironment(ctx context.Context, eng dockerEngine, store config.Store,
 			facts.Dev, facts.InspectErr = eng.Describe(ctx, plan.DevName(env.ID))
 		}
 	}
-	return doctor.CheckLocal(facts)
+	return append(doctor.CheckLocal(facts), tokenFindings(store, env, time.Now())...)
+}
+
+// tokenFindings say which tokens of the environment are about to expire or
+// have: a warning each, so that the environment stands out before git
+// stops working inside. From the records alone — no value is read.
+func tokenFindings(store config.Store, env config.Environment, now time.Time) []doctor.Finding {
+	tokens, err := store.LoadTokens(env.ID)
+	if err != nil {
+		return nil // records of an earlier build, or unreadable: bh token list says so
+	}
+	var out []doctor.Finding
+	for _, token := range tokens {
+		switch token.Urgency(now) {
+		case "expired":
+			out = append(out, doctor.Finding{Level: doctor.Warn, Message: fmt.Sprintf("the %s token has expired — bh token refresh %s %s", token.Service, env.Name, token.Service)})
+		case "soon":
+			left, _ := token.DaysLeft(now)
+			out = append(out, doctor.Finding{Level: doctor.Warn, Message: fmt.Sprintf("the %s token expires in %d day(s) — bh token refresh %s %s", token.Service, left, env.Name, token.Service)})
+		}
+	}
+	return out
 }
 
 func fileFact(path string) doctor.File {
@@ -151,6 +172,8 @@ func (a *app) machineFacts(store config.Store, cfg *config.Config, info *engine.
 		Keys: keys, KeysErr: keysErr,
 		Environments: len(cfg.Envs) + len(cfg.Broken),
 	}
+	// What is in force: the variable, for a run that sets it.
+	facts.SecretStore, _ = a.secretStoreKind(store, false)
 
 	path, err := a.sshConfigPath()
 	if err != nil {

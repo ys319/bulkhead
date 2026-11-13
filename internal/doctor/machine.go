@@ -37,6 +37,9 @@ type Machine struct {
 	// cannot be read.
 	Keys    int
 	KeysErr error
+	// SecretStore is where the values of secrets and tokens are kept:
+	// "keychain", "file", or "" while nothing was ever set.
+	SecretStore string
 
 	// Environments is how many there are, the broken ones included.
 	Environments int
@@ -56,7 +59,7 @@ type Machine struct {
 func CheckMachine(m Machine) []Finding {
 	var out []Finding
 	out = append(out, checkEngine(m), checkDockerCLI(m), checkSSHClient(m), checkVSCode(m))
-	out = append(out, checkMachineKey(m), checkKeyRegistry(m), checkInitScript(m))
+	out = append(out, checkMachineKey(m), checkKeyRegistry(m), checkSecretStore(m), checkInitScript(m))
 	return append(out, checkSSHConfig(m)...)
 }
 
@@ -120,6 +123,18 @@ func checkKeyRegistry(m Machine) Finding {
 		return ok("key registry: no keys besides the machine key")
 	}
 	return ok(fmt.Sprintf("key registry: %d key(s)", m.Keys))
+}
+
+// Where values are kept is the user's choice either way; the finding says
+// which it is, so that a file is not a surprise.
+func checkSecretStore(m Machine) Finding {
+	switch m.SecretStore {
+	case "keychain":
+		return ok("secrets and tokens are kept in the credential store of the operating system")
+	case "file":
+		return ok("secrets and tokens are kept in files readable only by you (bh secret store keychain moves them to the credential store)")
+	}
+	return ok("no secret or token was set yet — the first goes to the credential store, if this machine has one")
 }
 
 // init.sh is bound into every dev container. A missing file makes the

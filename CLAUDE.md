@@ -7,7 +7,7 @@ TS 版は隣の `../bulkhead-ts/`（退避済み。仕様・ADR・脅威モデ�
   **実機で未確認のもの**（§13）。
 - いまあるもの: 引数なしの TUI と、`create` / `configure` / `rename` / `up` / `down` /
   `restart` / `list` / `status` / `ssh` / `open` / `logs` / `init` / `root-shell` / `key` /
-  `remote` / `gpu` / `github` / `token` / `doctor` / `completion` / `path` / `snapshot` /
+  `remote` / `gpu` / `var` / `secret` / `token` / `doctor` / `completion` / `path` / `snapshot` /
   `rollback` / `export` / `import` / `archive` / `unarchive` / `reset` / `destroy` / `migrate` /
   `version`。まだ無いもの（`prune`、`--json`、Releases の自動ビルド）は仕様案 §13。
 - 構成:
@@ -23,13 +23,21 @@ TS 版は隣の `../bulkhead-ts/`（退避済み。仕様・ADR・脅威モデ�
   - `internal/sshkey` / `internal/sshconfig` — マシン鍵とフィンガープリント / `~/.ssh` の
     `Host bulkhead-<name>` と Include 行。
   - `internal/snapshot` — スナップショットのファイル形式（読み書きと検証）。
+  - `internal/vault` — secret と token の値の置き場（OS の資格情報ストア、またはファイル）。
+  - `internal/github` / `internal/huggingface` — token を出すサービスごとの知識（発行ページ・
+    確認・失効）。サービスを足すときは `cmd/bh/token.go` の一覧にも足す。
   - `internal/doctor` — 検査（純関数。入力は設定とコンテナの実状態）。
   - `internal/tui` — 全画面の UI（Bubble Tea）。`Backend` インターフェース越しにしか動かない。
 - 設定ディレクトリは `~/.config/bh`（`BH_CONFIG_DIR`）。TS 版の `~/.config/bulkhead`
   （`BULKHEAD_CONFIG_DIR`）とは別で、環境が移るのは `bh migrate` を通したときだけ。
   `~/.ssh` 側も TS 版と別（`~/.ssh/bh/config` と `# >>> bh >>>` のブロック）。
   開発中の検証では `BH_CONFIG_DIR` / `BULKHEAD_CONFIG_DIR` / `BH_SSH_CONFIG`（ssh の設定
-  ファイルの場所）を作業用の場所へ向ける。`HOME` は変えない — docker context の解決が変わる。
+  ファイルの場所）を作業用の場所へ向け、`BH_SECRET_STORE=file` を付ける（付けないと、secret と
+  token の値が利用者のキーチェーンに入る）。`HOME` は変えない — docker context の解決が変わる。
+- 環境へ渡す値は3つの経路（仕様案 §7）: var（env.json）/ secret / token。secret と token の
+  **値は記録のファイルに書かない** — `internal/vault` 経由で読み書きし、`tokens.json` /
+  `secrets.json` には値以外だけを置く。テストや検証の出力に、この作業環境自身の `GH_TOKEN` などを
+  出さない（子プロセスには要る環境変数だけを渡す）。
 - **データを消す操作は4つだけ。** ボリュームを消すのは `ops.removeVolumes` の1か所で、呼ぶのは
   `Destroy` / `Reset` / `Archive`（`internal/ops` のテストがソースを数えて確かめている）。
   `ops.Reset` は home と nix 以外のボリュームを断る（reset は2段階: 既定は nix だけ、

@@ -828,3 +828,24 @@ func TestMigrateWithoutACredentialStoreLeavesTheRecordsForLater(t *testing.T) {
 		t.Errorf("secrets: %q", list)
 	}
 }
+
+func TestDoctorSaysWhereValuesAreAndWhichTokensRunOut(t *testing.T) {
+	b := newBench(t)
+	b.path = map[string]bool{"code": true, "ssh": true, "docker": true}
+	b.now = time.Now()
+	b.ok("create", "web")
+	if out := b.ok("doctor"); !strings.Contains(out, "no secret or token was set yet") {
+		t.Errorf("before anything:\n%s", out)
+	}
+	// A token with three days to go.
+	b.web.Accept("octo", "github-authentication-token-expiration", b.now.Add(3*24*time.Hour+time.Hour).UTC().Format("2006-01-02 15:04:05 UTC"))
+	b.stdin = patNew
+	b.ok("token", "set", "web", "github", "read", "--no-open")
+	out := b.ok("doctor")
+	if !strings.Contains(out, "kept in the credential store") || !strings.Contains(out, "the github token expires in 3 day(s) — bh token refresh web github") {
+		t.Errorf("doctor:\n%s", out)
+	}
+	if strings.Contains(out, patNew) {
+		t.Error("doctor printed the token")
+	}
+}

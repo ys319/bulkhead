@@ -22,6 +22,9 @@ COPY_PORT=$((PORT + 1))
 WORK=$(mktemp -d) && [ -d "$WORK" ] || { echo "cannot make a work directory" >&2; exit 1; }
 export BH_CONFIG_DIR=$WORK/config
 export BH_SSH_CONFIG=$WORK/ssh/config
+# Values of secrets go to a file in that directory, not to your keychain
+# (one section asks for the keychain itself: BH_VERIFY_KEYCHAIN=1).
+export BH_SECRET_STORE=file
 export MSYS_NO_PATHCONV=1
 
 PASS=0
