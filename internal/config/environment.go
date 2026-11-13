@@ -33,6 +33,9 @@ type Environment struct {
 	GPU            string   // "off", "legacy" or "cdi"
 	CDIDevices     []string // devices for GPU "cdi"
 	DockerSocket   bool     // opt-in that gives up the boundary for this environment
+	// Vars are environment variables that are no secret: handed to the
+	// environment as they are, and copied with the settings.
+	Vars map[string]string
 	// Archived is set while the environment is put away: the name of the
 	// snapshot, in its snapshot directory, that holds its data. Its
 	// containers and volumes (all but the ssh host identity) are gone
@@ -113,6 +116,13 @@ func (e Environment) validate() error {
 				add("cdiDevices: %q does not look like vendor/class=name (for example nvidia.com/gpu=0)", device)
 			}
 		}
+		for name, value := range e.Vars {
+			if err := CheckName(name); err != nil {
+				add("vars: %s: %v", name, err)
+			} else if err := CheckValue(value); err != nil {
+				add("vars: %s: %v", name, err)
+			}
+		}
 		if e.Archived != "" && !snapshotNamePattern.MatchString(e.Archived) {
 			add("archived: %q is not the name of a snapshot file", e.Archived)
 		}
@@ -132,19 +142,20 @@ func (e Environment) validate() error {
 // envFile is env.json as it is read: every field optional, so that missing
 // and wrongly placed fields can be told apart and reported.
 type envFile struct {
-	Schema         *string   `json:"$schema"` // for editors; ignored
-	Version        *int      `json:"version"`
-	Name           *string   `json:"name"`
-	Type           *string   `json:"type"`
-	Host           *string   `json:"host"`
-	SSHPort        *int      `json:"sshPort"`
-	Publish        *bool     `json:"publish"`
-	Restart        *string   `json:"restart"`
-	AuthorizedKeys *[]string `json:"authorizedKeys"`
-	GPU            *string   `json:"gpu"`
-	CDIDevices     *[]string `json:"cdiDevices"`
-	DockerSocket   *bool     `json:"dockerSocket"`
-	Archived       *string   `json:"archived"`
+	Schema         *string            `json:"$schema"` // for editors; ignored
+	Version        *int               `json:"version"`
+	Name           *string            `json:"name"`
+	Type           *string            `json:"type"`
+	Host           *string            `json:"host"`
+	SSHPort        *int               `json:"sshPort"`
+	Publish        *bool              `json:"publish"`
+	Restart        *string            `json:"restart"`
+	AuthorizedKeys *[]string          `json:"authorizedKeys"`
+	GPU            *string            `json:"gpu"`
+	CDIDevices     *[]string          `json:"cdiDevices"`
+	DockerSocket   *bool              `json:"dockerSocket"`
+	Vars           *map[string]string `json:"vars"`
+	Archived       *string            `json:"archived"`
 }
 
 // ParseEnvironment reads the contents of an env.json. The result has no ID:
@@ -204,7 +215,7 @@ func (raw envFile) environment() (Environment, error) {
 		"publish": raw.Publish != nil, "restart": raw.Restart != nil,
 		"authorizedKeys": raw.AuthorizedKeys != nil, "gpu": raw.GPU != nil,
 		"cdiDevices": raw.CDIDevices != nil, "dockerSocket": raw.DockerSocket != nil,
-		"archived": raw.Archived != nil,
+		"archived": raw.Archived != nil, "vars": raw.Vars != nil,
 	}
 	switch env.Type {
 	case TypeLocal:
@@ -227,6 +238,9 @@ func (raw envFile) environment() (Environment, error) {
 		if raw.DockerSocket != nil {
 			env.DockerSocket = *raw.DockerSocket
 		}
+		if raw.Vars != nil && len(*raw.Vars) > 0 {
+			env.Vars = *raw.Vars
+		}
 		if raw.Archived != nil {
 			env.Archived = *raw.Archived
 		}
@@ -239,7 +253,7 @@ func (raw envFile) environment() (Environment, error) {
 		} else {
 			env.Host = *raw.Host
 		}
-		for _, field := range []string{"publish", "restart", "authorizedKeys", "gpu", "cdiDevices", "dockerSocket", "archived"} {
+		for _, field := range []string{"publish", "restart", "authorizedKeys", "gpu", "cdiDevices", "dockerSocket", "archived", "vars"} {
 			if localOnly[field] {
 				misplaced = append(misplaced, field)
 			}
@@ -275,6 +289,8 @@ type localFile struct {
 	GPU            string   `json:"gpu"`
 	CDIDevices     []string `json:"cdiDevices"`
 	DockerSocket   bool     `json:"dockerSocket"`
+	// Environment variables that are no secret (bh var).
+	Vars map[string]string `json:"vars,omitempty"`
 	// Only there while the environment is archived: not a setting to edit.
 	Archived string `json:"archived,omitempty"`
 }
@@ -300,6 +316,7 @@ func (e Environment) file() any {
 		GPU:            e.GPU,
 		CDIDevices:     append([]string{}, e.CDIDevices...),
 		DockerSocket:   e.DockerSocket,
+		Vars:           e.Vars,
 		Archived:       e.Archived,
 	}
 }

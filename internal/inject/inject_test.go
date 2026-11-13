@@ -11,10 +11,10 @@ import (
 
 const token = "github_pat_11AAAAAAA0aaaaaaaaaaaa_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
-func sample() config.GitHubState {
+func sample() config.Token {
 	expires := "2026-11-11T06:30:00.000Z"
-	return config.GitHubState{
-		Token: token, Preset: "push", Owner: "octo", TokenName: "bh-main-10121530",
+	return config.Token{
+		Service: config.ServiceGitHub, Preset: "push", Owner: "octo", TokenName: "bh-main-10121530",
 		IssuedAt: "2026-10-12T06:30:00.000Z", ExpiresAt: &expires, Repos: []string{"octo/foo", "octo/bar"},
 	}
 }
@@ -40,23 +40,24 @@ func TestGitHubMeta(t *testing.T) {
 }
 
 func TestGitHubInputIsTheTokenLineThenTheMetadata(t *testing.T) {
-	input := string(GitHubInput(sample()))
+	input := string(GitHubInput(sample(), token))
 	first, rest, _ := strings.Cut(input, "\n")
 	if first != token || rest != GitHubMeta(sample()) {
 		t.Errorf("input = %q", input)
 	}
 }
 
-func TestTokensInput(t *testing.T) {
-	input := TokensInput([]config.TokenEntry{
-		{Kind: "hf", Name: "HF_TOKEN", Value: "hf_a", AddedAt: "t"},
-		{Kind: "custom", Name: "K", Value: "a=b", AddedAt: "t"},
+func TestEnvInput(t *testing.T) {
+	input := EnvInput([]Variable{
+		{Name: "HF_TOKEN", Value: "hf_a"},
+		{Name: "K", Value: "a=b"},
+		{Name: "GIT_AUTHOR_NAME", Value: "It's Me"},
 	})
-	if string(input) != "HF_TOKEN=hf_a\nK=a=b\n" {
+	if string(input) != "HF_TOKEN=hf_a\nK=a=b\nGIT_AUTHOR_NAME=It's Me\n" {
 		t.Errorf("input = %q", input)
 	}
-	// No tokens is an empty file, which is what takes the last one out.
-	if input := TokensInput(nil); len(input) != 0 {
+	// Nothing is an empty file, which is what takes the last one out.
+	if input := EnvInput(nil); len(input) != 0 {
 		t.Errorf("input = %#v", input)
 	}
 }

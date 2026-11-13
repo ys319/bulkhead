@@ -45,10 +45,17 @@ type Permission struct{ Name, Access string }
 // presets are the permissions the page is filled in with. "Metadata: read"
 // is added by GitHub itself. Workflows is in none of them: whoever needs it
 // adds it on the page, as their own decision.
+//
+// Reading the results of CI (actions, statuses) comes with push: whoever
+// can push can already change what the workflows run, which reaches further
+// than reading their logs does. It is not in read, which is often given for
+// other repositories — dependencies — whose CI is none of the
+// environment's business. Pull requests are the last step: with them the
+// token can review in the user's name.
 var presets = map[string][]Permission{
-	"read":    {{"contents", "read"}},
-	"push":    {{"contents", "write"}},
-	"push+pr": {{"contents", "write"}, {"pull_requests", "write"}},
+	"read":       {{"contents", "read"}},
+	"push":       {{"contents", "write"}, {"actions", "read"}, {"statuses", "read"}},
+	"contribute": {{"contents", "write"}, {"actions", "read"}, {"statuses", "read"}, {"pull_requests", "write"}},
 }
 
 // Permissions are the permissions of a preset; false for an unknown one.

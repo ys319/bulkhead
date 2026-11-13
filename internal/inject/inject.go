@@ -68,7 +68,7 @@ var TokensWrite = Job{Key: "tokens", Mount: "/t", Script: strings.Join([]string{
 
 // GitHubMeta is what the environment is told about its GitHub token:
 // key=value lines, which bh-guest reads with sed. The token is not in it.
-func GitHubMeta(state config.GitHubState) string {
+func GitHubMeta(state config.Token) string {
 	lines := []string{
 		"preset=" + state.Preset,
 		"owner=" + state.Owner,
@@ -82,17 +82,23 @@ func GitHubMeta(state config.GitHubState) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// GitHubInput is the input of GitHubWrite.
-func GitHubInput(state config.GitHubState) []byte {
-	return []byte(state.Token + "\n" + GitHubMeta(state))
+// GitHubInput is the input of GitHubWrite: the token's value, then what
+// the environment is told about it.
+func GitHubInput(state config.Token, value string) []byte {
+	return []byte(value + "\n" + GitHubMeta(state))
 }
 
-// TokensInput is the input of TokensWrite: one NAME=value line per token.
-// Kind and date stay on this machine.
-func TokensInput(tokens []config.TokenEntry) []byte {
+// Variable is one environment variable the environment gets: a variable,
+// a secret, or a token that reaches it as nothing more than a variable.
+type Variable struct{ Name, Value string }
+
+// EnvInput is the input of TokensWrite: one NAME=value line each. bh-guest
+// quotes the values when it exports them, so they are written as they are;
+// a value is one line (config.CheckValue).
+func EnvInput(variables []Variable) []byte {
 	var text strings.Builder
-	for _, token := range tokens {
-		text.WriteString(token.Name + "=" + token.Value + "\n")
+	for _, variable := range variables {
+		text.WriteString(variable.Name + "=" + variable.Value + "\n")
 	}
 	return []byte(text.String())
 }

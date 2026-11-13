@@ -49,7 +49,7 @@ func TestEveryPresetHasPermissionsAndNoneHasWorkflows(t *testing.T) {
 
 func TestTemplateURL(t *testing.T) {
 	parsed, err := url.Parse(github.TemplateURL(github.Template{
-		Env: "main", Preset: "push+pr", Owner: "acme", Days: 30, TokenName: "bh-main-10121530", Hostname: "mac",
+		Env: "main", Preset: "contribute", Owner: "acme", Days: 30, TokenName: "bh-main-10121530", Hostname: "mac",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -60,8 +60,8 @@ func TestTemplateURL(t *testing.T) {
 	query := parsed.Query()
 	for key, want := range map[string]string{
 		"name": "bh-main-10121530", "target_name": "acme", "expires_in": "30",
-		"contents": "write", "pull_requests": "write",
-		"description": `bulkhead environment "main" on mac (preset: push+pr)`,
+		"contents": "write", "pull_requests": "write", "actions": "read", "statuses": "read",
+		"description": `bulkhead environment "main" on mac (preset: contribute)`,
 	} {
 		if got := query.Get(key); got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)

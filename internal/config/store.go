@@ -116,6 +116,9 @@ func NewID() (string, error) {
 type rootFile struct {
 	Version int    `json:"version"`
 	ID      string `json:"id"`
+	// SecretStore is where this machine keeps the values of tokens and
+	// secrets ("keychain" or "file"); absent until the first one is set.
+	SecretStore string `json:"secretStore,omitempty"`
 }
 
 // Owner is the id of this directory, as put on the Docker resources it
@@ -143,6 +146,47 @@ func (s Store) Owner() (string, error) {
 		return "", fmt.Errorf("%s: %q is not a valid id", s.rootFile(), root.ID)
 	}
 	return root.ID, nil
+}
+
+// readRoot reads bulkhead.json; a directory that is not initialized has an
+// empty one.
+func (s Store) readRoot() (rootFile, error) {
+	var root rootFile
+	data, err := os.ReadFile(s.rootFile())
+	if errors.Is(err, fs.ErrNotExist) {
+		return root, nil
+	}
+	if err != nil {
+		return root, err
+	}
+	if err := decodeStrict(data, &root); err != nil {
+		return root, fmt.Errorf("%s: %w", s.rootFile(), err)
+	}
+	return root, nil
+}
+
+// SecretStore is where this machine keeps the values of tokens and
+// secrets: "keychain", "file", or "" while that is not decided.
+func (s Store) SecretStore() (string, error) {
+	root, err := s.readRoot()
+	return root.SecretStore, err
+}
+
+// SetSecretStore records the decision. The directory is initialized first
+// if need be.
+func (s Store) SetSecretStore(kind string) error {
+	if kind != "keychain" && kind != "file" {
+		return fmt.Errorf("%q is not a place for secrets (keychain or file)", kind)
+	}
+	if _, err := s.Init(); err != nil {
+		return err
+	}
+	root, err := s.readRoot()
+	if err != nil {
+		return err
+	}
+	root.SecretStore = kind
+	return writeJSON(s.rootFile(), root)
 }
 
 // Init makes sure the directory is initialized and returns its owner id.

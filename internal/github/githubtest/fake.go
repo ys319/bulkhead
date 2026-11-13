@@ -24,6 +24,7 @@ type Request struct {
 // Path is the path of the request's address.
 func (r Request) Path() string {
 	path := strings.TrimPrefix(r.URL, "https://api.github.com")
+	path = strings.TrimPrefix(path, "https://huggingface.co")
 	path, _, _ = strings.Cut(path, "?")
 	return path
 }
@@ -107,7 +108,10 @@ func (w *Web) RoundTrip(request *http.Request) (*http.Response, error) {
 	respond := w.routes[request.URL.Path]
 	w.mu.Unlock()
 
-	if request.URL.Scheme != "https" || request.URL.Host != "api.github.com" || respond == nil {
+	// The services bh talks to: GitHub's API, and Hugging Face (whose paths
+	// all start with /api, so the two do not collide).
+	known := request.URL.Host == "api.github.com" || request.URL.Host == "huggingface.co"
+	if request.URL.Scheme != "https" || !known || respond == nil {
 		w.t.Errorf("unexpected request: %s %s", request.Method, request.URL)
 		return nil, errors.New("unexpected request")
 	}
@@ -127,3 +131,11 @@ func (w *Web) Accept(login string, headers ...string) {
 
 // Revocable makes the revocation endpoint accept.
 func (w *Web) Revocable() { w.Reply("/credentials/revoke", http.StatusAccepted, "") }
+
+// HuggingFace makes Hugging Face accept a token of the role, as the
+// account's, and take revocations.
+func (w *Web) HuggingFace(account, role string) {
+	w.Reply("/api/whoami-v2", http.StatusOK,
+		`{"type": "user", "name": "`+account+`", "auth": {"type": "access_token", "accessToken": {"displayName": "bh", "role": "`+role+`"}}}`)
+	w.Reply("/api/credentials/revoke", http.StatusAccepted, "")
+}
