@@ -280,7 +280,9 @@ bh token remove <env> [<service>] [--yes]
 その値。Docker にも資格情報ストアにも触れない。スクリプトは `bh` のほか、呼ばれたときの名前
 （入れる前の `bh-darwin-arm64` など）にも登録する。PowerShell は空の引数をプログラムへ渡せない版が
 あるので、「空白の後ろにいる」ことは `--new-word` で伝える。bh に候補が無い位置では、PowerShell は
-ファイル名の補完へ落ちる（止めようと空文字を返すと pwsh 7.6 が例外を出す）。補完用のパッケージは
+ファイル名の補完へ落ちる（止めようと空文字を返すと pwsh 7.6 が例外を出す）。bash は説明を出す場所が
+無いので名前だけ。並びは bh が答えた順のまま（`compopt -o nosort` — bash 4.4 から。それより前は
+アルファベット順になる）。補完用のパッケージは
 採らなかった（2026-11-13 — 補完だけのものは更新が止まっているか cobra が前提。CLI 全体を cobra へ
 移すほどの理由が無い）。
 
@@ -908,7 +910,7 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | --- | --- |
 | 上の修正 (手) | `bh open` が新しいウィンドウを開く / TUI の Logs から Ctrl-C で TUI へ戻る / 失敗した ssh の後で Enter を待つ / `HostKeyAlias` つきの項目で VS Code Remote SSH がつながる / メニューの幅 / 下段の並び（メッセージ → 操作説明） |
 | 資格情報ストア (手) | ssh 越しなど使えない場所で「ファイルにする」案内が出ること。Windows・Linux は未確認（macOS のキーチェーンは 2026-11-13 に通過 — 上） |
-| 補完 (手) | `eval "$(bh completion zsh)"` で、`bh token set <env> ` の後にサービス、その後にプリセットが説明つきで弱い順に出る / `bh var unset <env> ` で変数名 / `bh rollback <env> ` でスナップショット。ここでは本物の zsh を擬似端末で動かして確かめた。PowerShell は Linux の pwsh 7.6.5 で `TabExpansion2` を呼んで確かめた（コマンド・サブコマンド・環境・サービス・プリセットの説明・フラグとその値・引用符つきの語）— **Windows と Windows PowerShell 5.1 では未確認**。bash は入口のスクリプトだけ確かめた（対話の bash、とくに macOS の 3.2 は未確認） |
+| 補完 (手) | `eval "$(bh completion zsh)"` で、`bh token set <env> ` の後にサービス、その後にプリセットが説明つきで弱い順に出る / `bh var unset <env> ` で変数名 / `bh rollback <env> ` でスナップショット。ここでは本物の zsh を擬似端末で動かして確かめた。PowerShell は Linux の pwsh 7.6.5 で `TabExpansion2` を呼んで確かめた（コマンド・サブコマンド・環境・サービス・プリセットの説明・フラグとその値・引用符つきの語）— **Windows と Windows PowerShell 5.1 では未確認**。bash は対話の bash 5.2.37（Linux）を擬似端末で動かして確かめた（コマンド・サブコマンド・環境・サービス・プリセットが弱い順・変数名・フラグとその値・ファイル名（空白入り、ディレクトリの中）・行の途中・候補が無い位置では何も出ない）— **macOS の bash 3.2 は未確認**（ここで 3.2 をビルドして試すのは止めた。`compopt` が無いので、順序はアルファベット順になり、ファイル名の空白のエスケープとディレクトリ末尾の `/` は付かない見込み。`/bin/bash` で `eval "$(bh completion bash)"` して `bh token set <env> github ` で Tab） |
 | token (手) | 本物のトークンで: `bh token set <env> <service> <preset>`、GitHub の3つのプリセットで発行ページに入る権限、`bh token refresh`（Regenerate して貼る）、`bh token remove` の失効、Hugging Face の種類の読み取りと失効（**Hugging Face の API は文書を読んだだけで、一度も呼んでいない**）、`gh run view --log` が `push` で通ること、期限が近いときの表示。前のビルドで設定したトークン（`github.json`）が読み替えられること |
 | GitHub トークン (手) | `revoke`、`destroy` 時の失効、git と gh から使えること。Windows のコンソールでの非表示入力 |
 | restart --rebuild (手) | `--pull --no-cache` で作り直され、コンテナが新しいイメージで起動する |

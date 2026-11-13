@@ -600,6 +600,9 @@ _bh() {
     COMPREPLY=($(compgen -f -- "${COMP_WORDS[COMP_CWORD]}"))
     return
   fi
+  # In the order bh gave them (presets go from the least to the most);
+  # bash before 4.4 cannot, and sorts them.
+  compopt -o nosort 2>/dev/null
   local line
   for line in "${lines[@]}"; do
     COMPREPLY+=("${line%%$'\t'*}")
