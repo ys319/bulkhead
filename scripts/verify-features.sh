@@ -115,21 +115,21 @@ same() { # same <desc> <got> <want>
   if [ "$2" = "$3" ]; then ok "$1"; else ng "$1"; echo "      | got:  $2"; echo "      | want: $3"; fi
 }
 VALUE="it's a \"value\" with  spaces & \$HOME \$(echo no)"
-check "var set" "$BH" var set "$NAME" BH_VERIFY_VAR "$VALUE"
-same "a new shell has the variable, character for character" "$(inside BH_VERIFY_VAR)" "$VALUE"
-check "var list shows it" bash -c "\"$BH\" var list $NAME | grep -q '^BH_VERIFY_VAR='"
-check "a lower-case name works too" "$BH" var set "$NAME" bh_verify_lower plain
-same "…and reaches a new shell" "$(inside bh_verify_lower)" plain
-check "secret set (value on stdin)" bash -c "printf 'bh-verify-secret' | \"$BH\" secret set $NAME BH_VERIFY_SECRET"
-same "a new shell has the secret" "$(inside BH_VERIFY_SECRET)" bh-verify-secret
+check "var set" "$BH" var set "$NAME" VERIFY_VAR "$VALUE"
+same "a new shell has the variable, character for character" "$(inside VERIFY_VAR)" "$VALUE"
+check "var list shows it" bash -c "\"$BH\" var list $NAME | grep -q '^VERIFY_VAR='"
+check "a lower-case name works too" "$BH" var set "$NAME" verify_lower plain
+same "…and reaches a new shell" "$(inside verify_lower)" plain
+check "secret set (value on stdin)" bash -c "printf 'bh-verify-secret' | \"$BH\" secret set $NAME VERIFY_SECRET"
+same "a new shell has the secret" "$(inside VERIFY_SECRET)" bh-verify-secret
 check "the file inside belongs to the dev user, mode 600" bash -c "[ \"\$(docker exec bulkhead-$ID-dev stat -c '%u %a' /etc/bulkhead/tokens/env)\" = '1000 600' ]"
-check "secret list names it and does not show it" bash -c "out=\$(\"$BH\" secret list $NAME); grep -q BH_VERIFY_SECRET <<<\"\$out\" && ! grep -q bh-verify-secret <<<\"\$out\""
+check "secret list names it and does not show it" bash -c "out=\$(\"$BH\" secret list $NAME); grep -q VERIFY_SECRET <<<\"\$out\" && ! grep -q bh-verify-secret <<<\"\$out\""
 check "the records do not hold the value" bash -c "! grep -q bh-verify-secret \"$BH_CONFIG_DIR/environments/$ID/secrets.json\" \"$BH_CONFIG_DIR/environments/$ID/env.json\""
 check "the file that does is private (600)" bash -c "[ \"\$(ls -l \"$BH_CONFIG_DIR/environments/$ID/values.json\" | cut -c1-10)\" = '-rw-------' ]"
-check "var unset" "$BH" var unset "$NAME" BH_VERIFY_VAR
-check "var unset (the other)" "$BH" var unset "$NAME" bh_verify_lower
-check "secret remove" "$BH" secret remove "$NAME" BH_VERIFY_SECRET
-same "…and a new shell has none of them" "$(inside BH_VERIFY_VAR)$(inside bh_verify_lower)$(inside BH_VERIFY_SECRET)" ""
+check "var unset" "$BH" var unset "$NAME" VERIFY_VAR
+check "var unset (the other)" "$BH" var unset "$NAME" verify_lower
+check "secret remove" "$BH" secret remove "$NAME" VERIFY_SECRET
+same "…and a new shell has none of them" "$(inside VERIFY_VAR)$(inside verify_lower)$(inside VERIFY_SECRET)" ""
 refuse "the last secret took the values file with it" test -e "$BH_CONFIG_DIR/environments/$ID/values.json"
 skip "bh token set needs a real token: check by hand (bh token set <env>)"
 
@@ -138,18 +138,18 @@ skip "bh token set needs a real token: check by hand (bh token set <env>)"
 if [ "${BH_VERIFY_KEYCHAIN:-}" = 1 ]; then
   echo "== the credential store (BH_VERIFY_KEYCHAIN=1) =="
   real() { env -u BH_SECRET_STORE "$@"; }
-  check "secret set, with the store left to bh" bash -c "printf 'bh-verify-keychain' | env -u BH_SECRET_STORE \"$BH\" secret set $NAME BH_VERIFY_KEYCHAIN_SECRET"
+  check "secret set, with the store left to bh" bash -c "printf 'bh-verify-keychain' | env -u BH_SECRET_STORE \"$BH\" secret set $NAME VERIFY_KEYCHAIN_SECRET"
   check "bh chose the credential store" bash -c "env -u BH_SECRET_STORE \"$BH\" secret store | grep -q '(keychain)'"
   check "no file under the configuration directory holds the value" bash -c "! grep -rq bh-verify-keychain \"$BH_CONFIG_DIR\""
-  same "a new shell has it" "$(inside BH_VERIFY_KEYCHAIN_SECRET)" bh-verify-keychain
+  same "a new shell has it" "$(inside VERIFY_KEYCHAIN_SECRET)" bh-verify-keychain
   check "restart reads it back from the store" real "$BH" restart "$NAME"
-  same "…and hands it in again" "$(inside BH_VERIFY_KEYCHAIN_SECRET)" bh-verify-keychain
+  same "…and hands it in again" "$(inside VERIFY_KEYCHAIN_SECRET)" bh-verify-keychain
   OWNER=$(sed -n 's/.*"id": *"\([^"]*\)".*/\1/p' "$BH_CONFIG_DIR/bulkhead.json")
-  ACCOUNT="$OWNER/$ID/secret/BH_VERIFY_KEYCHAIN_SECRET"
+  ACCOUNT="$OWNER/$ID/secret/VERIFY_KEYCHAIN_SECRET"
   if command -v security >/dev/null 2>&1; then
     check "the item is in the keychain, under bulkhead" security find-generic-password -s bulkhead -a "$ACCOUNT"
   fi
-  check "secret remove" real "$BH" secret remove "$NAME" BH_VERIFY_KEYCHAIN_SECRET
+  check "secret remove" real "$BH" secret remove "$NAME" VERIFY_KEYCHAIN_SECRET
   if command -v security >/dev/null 2>&1; then
     refuse "…and the item is gone from the keychain" security find-generic-password -s bulkhead -a "$ACCOUNT"
   fi
