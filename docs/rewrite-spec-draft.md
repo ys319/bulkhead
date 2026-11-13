@@ -663,6 +663,11 @@ exec の端末接続が Windows 固有の不確定要素）。
   - 値つきの行があるメニュー（Runtime など）が画面いっぱいに広がった。
   - スクリプト側の間違い2つ（`bh init` の再実行の行数の読み方、トークンの検査が飛ばされる）。
 
+**reset の2段階とラベルの切り替え（同日、`72efe5a` のビルド）: `scripts/verify-features.sh` が
+70 項目通過・失敗 0、続く境界の検査も 54 項目すべて通過。** ツールの段階（home の nix の状態を
+イメージから入れ直すスクリプトが実際に走った最初）と `--home` の段階、新しい接頭辞のラベルで
+作った環境の一通り。
+
 **スナップショット（同日、`0efabc9` のビルド）: `scripts/verify-snapshots.sh` が 77 項目通過・
 失敗 0。** snapshot / rollback（全体と片方）/ export・import / archive・unarchive。所有者・
 モード・ハードリンク・切れたリンクが戻ること、外したパスに触らないこと、新しいボリュームで nix が
@@ -687,7 +692,7 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | migrate の追加分 (手) | dev.Dockerfile・トークン・init.sh を持つ TS 版の環境の移行 |
 | Windows (手) | named pipe への接続、`init.sh` の bind（ドライブレターつきのパス。doctor の照合も）、root-shell、TUI |
 | スナップショット (手) | TUI の Snapshot / Roll back / Archive / Unarchive。大きな workspace での所要時間。アーカイブ時の GitHub トークンの失効（本物のトークンで） |
-| reset の2段階 | `scripts/verify-features.sh` の reset の節（書き直した）。ツールの段階: nix ボリュームが消え、home のファイルが残り、キャッシュが消え、新しいストアで nix が動き、`init.sh` が走り直す。`--home`: 先にスナップショットが取られ、home が作り直される。**home の nix の状態をイメージから入れ直すスクリプトは、一度も実機で動いていない** |
+| reset (手) | TUI の Reset の2段階 |
 | ラベルの切り替え (手) | 前のビルドで作った環境に `bh up` → コンテナが作り直されて動くこと。それまでは doctor が「今の設定と違う」と warn を出す |
 
 作り直すときに入れる要望（2026-11-13）:
