@@ -52,7 +52,8 @@ bh open web      # VS Code で開く
 bh down web      # 止める（コンテナとデータは残る）
 ```
 
-`bh` だけで起動すると、同じ操作を全画面のメニューから行える。コマンドの一覧は `bh help`。
+`bh` だけで起動すると、同じ操作を全画面のメニューから行える。コマンドの一覧は `bh help`、
+1つのコマンドの使い方は `bh help <コマンド>`（`bh <コマンド> --help` でも同じ）。
 
 設定は `~/.config/bh`（Windows は `%APPDATA%\bh`。`BH_CONFIG_DIR` で変えられる）に置かれる。
 環境のデータは Docker のボリュームにあり、**消すのは `bh destroy` / `bh reset` / `bh archive`
@@ -70,7 +71,8 @@ bh token set web github push            # サービスが発行する資格情�
 
 token は `bh token set web github push` のように、環境・サービス・プリセットを続けて書く。
 GitHub のプリセットは `read` / `push` / `contribute` で、発行ページが項目入りで開く。何が選べるかは
-補完が出す（`eval "$(bh completion zsh)"` — サービス、プリセットとその意味、環境の持つ変数名や
+補完が出す（zsh は `eval "$(bh completion zsh)"`、bash は `eval "$(bh completion bash)"`、PowerShell は
+`bh completion powershell | Out-String | Invoke-Expression` — サービス、プリセットとその意味、環境の持つ変数名や
 スナップショットの名前まで）。期限が近づいたら
 `bh token refresh web` で、同じトークンを再発行して貼り直す。`bh token remove` は失効もさせる。
 

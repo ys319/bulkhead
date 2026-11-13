@@ -265,12 +265,24 @@ bh token remove <env> [<service>] [--yes]
 その環境に token が1本しかないときだけ省ける。語順は動詞が先のまま（`bh <env> …` の形にはしない
 — 同日の決定）。
 
-**補完**（`bh completion zsh|bash`）: シェル側のスクリプトは入口だけで、候補は bh 自身が答える
+**ヘルプ**: CLI は TUI が使えない場面のためのものなので、頼りは補完よりまずヘルプ（2026-11-13、
+ユーザー）。`bh help` が一覧、`bh help <コマンド>` と `bh <コマンド> --help`（`-h`）がそのコマンドの
+分を、標準出力へ・終了コード 0 で・何もせずに出す。サブコマンドを持つものと `configure` は自分の
+使い方の文面、ほかは一覧の中の自分の項目（文面は1か所 — 一覧と食い違わない）。`--help` は
+フラグの並びの中にあっても効く（`bh create web --port 1 --help` は何も作らない）。`bh ssh <env>` より
+後ろは向こうで動かすコマンドなので、そこの `--help` は bh が取らない。
+
+**補完**（`bh completion zsh|bash|powershell`）: シェル側のスクリプトは入口だけで、候補は bh 自身が答える
 （`bh __complete -- <入力中の語…>`）。表と設定ディレクトリから、位置ごとに出す: コマンドと
 サブコマンド（説明つき）、環境（コマンドに合うもの — `up` はアーカイブ中でないもの、`unarchive` は
 アーカイブ中のもの）、サービス、そのサービスのプリセット（何を許すかの説明つき、弱い順）、その
 環境が持つ token・変数名・secret の名前・スナップショット（`rollback` は `latest` も）・鍵、フラグと
-その値。Docker にも資格情報ストアにも触れない。
+その値。Docker にも資格情報ストアにも触れない。スクリプトは `bh` のほか、呼ばれたときの名前
+（入れる前の `bh-darwin-arm64` など）にも登録する。PowerShell は空の引数をプログラムへ渡せない版が
+あるので、「空白の後ろにいる」ことは `--new-word` で伝える。bh に候補が無い位置では、PowerShell は
+ファイル名の補完へ落ちる（止めようと空文字を返すと pwsh 7.6 が例外を出す）。補完用のパッケージは
+採らなかった（2026-11-13 — 補完だけのものは更新が止まっているか cobra が前提。CLI 全体を cobra へ
+移すほどの理由が無い）。
 
 - `set`（`add` でなく `set` — 環境ごと・サービスごとに1本で、もう一度実行すると置き換わるので。
   var / secret の `set` とも揃う）: 発行ページを開く（入れられる項目は埋めておく）→ 利用者が
@@ -834,7 +846,7 @@ exec の端末接続が Windows 固有の不確定要素）。
   ボリュームの中身は TS 版と同じ。書き込みは holder イメージの使い捨てコンテナ
   （`--network none`、中身は標準入力）。
 - **doctor**: ホストの準備と、コンテナの実状態に対する不変条件の検査（`internal/doctor` —
-  純関数。期待値は `internal/plan` と同じ事実から）。**補完**（`completion zsh|bash`）。
+  純関数。期待値は `internal/plan` と同じ事実から）。**補完**（`completion zsh|bash|powershell`）と**ヘルプ**（§7）。
 - **reset**: home と nix を消して作り直す。ボリュームを消すコードは `ops.removeVolumes` の
   1か所で、呼ぶのは Destroy と Reset だけ（テストがソースを数える）。
 - **TUI**（`internal/tui` — Bubble Tea v2）: TS 版の並び（一覧の4区画・状態を名前の色で示す・
@@ -896,7 +908,7 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | --- | --- |
 | 上の修正 (手) | `bh open` が新しいウィンドウを開く / TUI の Logs から Ctrl-C で TUI へ戻る / 失敗した ssh の後で Enter を待つ / `HostKeyAlias` つきの項目で VS Code Remote SSH がつながる / メニューの幅 / 下段の並び（メッセージ → 操作説明） |
 | 資格情報ストア (手) | ssh 越しなど使えない場所で「ファイルにする」案内が出ること。Windows・Linux は未確認（macOS のキーチェーンは 2026-11-13 に通過 — 上） |
-| 補完 (手) | `eval "$(bh completion zsh)"` で、`bh token set <env> ` の後にサービス、その後にプリセットが説明つきで弱い順に出る / `bh var unset <env> ` で変数名 / `bh rollback <env> ` でスナップショット。ここでは本物の zsh を擬似端末で動かして確かめた。bash は入口のスクリプトだけ確かめた |
+| 補完 (手) | `eval "$(bh completion zsh)"` で、`bh token set <env> ` の後にサービス、その後にプリセットが説明つきで弱い順に出る / `bh var unset <env> ` で変数名 / `bh rollback <env> ` でスナップショット。ここでは本物の zsh を擬似端末で動かして確かめた。PowerShell は Linux の pwsh 7.6.5 で `TabExpansion2` を呼んで確かめた（コマンド・サブコマンド・環境・サービス・プリセットの説明・フラグとその値・引用符つきの語）— **Windows と Windows PowerShell 5.1 では未確認**。bash は入口のスクリプトだけ確かめた（対話の bash、とくに macOS の 3.2 は未確認） |
 | token (手) | 本物のトークンで: `bh token set <env> <service> <preset>`、GitHub の3つのプリセットで発行ページに入る権限、`bh token refresh`（Regenerate して貼る）、`bh token remove` の失効、Hugging Face の種類の読み取りと失効（**Hugging Face の API は文書を読んだだけで、一度も呼んでいない**）、`gh run view --log` が `push` で通ること、期限が近いときの表示。前のビルドで設定したトークン（`github.json`）が読み替えられること |
 | GitHub トークン (手) | `revoke`、`destroy` 時の失効、git と gh から使えること。Windows のコンソールでの非表示入力 |
 | restart --rebuild (手) | `--pull --no-cache` で作り直され、コンテナが新しいイメージで起動する |

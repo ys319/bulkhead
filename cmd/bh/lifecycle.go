@@ -27,6 +27,9 @@ func parseFlags(flags *flag.FlagSet, args []string) ([]string, error) {
 	var rest []string
 	for {
 		if err := flags.Parse(args); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return nil, errHelpAsked // --help further along the line
+			}
 			return nil, usagef("%s: %v", flags.Name(), err)
 		}
 		args = flags.Args()

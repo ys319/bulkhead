@@ -28,7 +28,7 @@ func TestCompletionPrintsAScript(t *testing.T) {
 	if out := b.ok("completion", "bash"); !strings.HasSuffix(out, "\ncomplete -F _bh bh\n") {
 		t.Errorf("bash: the script does not end by registering itself:\n%s", out)
 	}
-	if stderr := b.fails(2, "completion"); !strings.Contains(stderr, "usage: bh completion zsh|bash") {
+	if stderr := b.fails(2, "completion"); !strings.Contains(stderr, "usage: bh completion zsh|bash|powershell") {
 		t.Errorf("stderr: %s", stderr)
 	}
 	if stderr := b.fails(2, "completion", "fish"); !strings.Contains(stderr, `"fish" is not a supported shell`) {
@@ -173,7 +173,7 @@ func TestCompletionOffersWhatGoesAtEachPosition(t *testing.T) {
 		{[]string{"-"}, []string{"--version", "--help"}},
 		{[]string{"token", ""}, []string{"list", "set", "refresh", "remove"}},
 		{[]string{"token", "re"}, []string{"refresh", "remove"}},
-		{[]string{"completion", ""}, []string{"zsh", "bash"}},
+		{[]string{"completion", ""}, []string{"zsh", "bash", "powershell"}},
 		{[]string{"secret", "store", ""}, []string{"keychain", "file"}},
 		{[]string{"nosuch", ""}, nil},
 		{[]string{"token", "nosuch", ""}, nil},
@@ -300,7 +300,7 @@ func TestCompletionScriptsParse(t *testing.T) {
 			if err != nil {
 				t.Skipf("%s is not installed", shell)
 			}
-			script, err := completionScript(shell)
+			script, err := completionScript(shell, "bh")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -329,7 +329,7 @@ func TestBashScriptCarriesTheLineAndTheAnswer(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "bh"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script, _ := completionScript("bash")
+	script, _ := completionScript("bash", "bh")
 	// A bash that is not built for a terminal has no completion builtins;
 	// the script only needs them to register itself.
 	script = "complete() { :; }\ncompopt() { :; }\n" + script
@@ -345,5 +345,48 @@ func TestBashScriptCarriesTheLineAndTheAnswer(t *testing.T) {
 	asked, err := os.ReadFile(filepath.Join(dir, "asked"))
 	if err != nil || string(asked) != "__complete\n--\ntoken\nset\nweb\ngithub\n\n" {
 		t.Errorf("bh was asked %q (%v)", asked, err)
+	}
+}
+
+// Before it is installed as bh the program runs under the name of the file
+// it came as. The scripts register themselves for that name too, and ask
+// whichever program was typed.
+func TestCompletionScriptsRegisterTheNameInUse(t *testing.T) {
+	for _, test := range []struct{ shell, program, want string }{
+		{"zsh", "bh", "\ncompdef _bh bh\n"},
+		{"zsh", "bh-darwin-arm64", "\ncompdef _bh bh bh-darwin-arm64\n"},
+		{"bash", "bh-linux-amd64", "\ncomplete -F _bh bh bh-linux-amd64\n"},
+		{"powershell", "bh-windows-amd64.exe", "-CommandName bh, bh-windows-amd64 -ScriptBlock"},
+		{"powershell", "bh.exe", "-CommandName bh -ScriptBlock"},
+		// A name the scripts could not carry is left out, not quoted.
+		{"zsh", "my bh; echo", "\ncompdef _bh bh\n"},
+		{"bash", "", "\ncomplete -F _bh bh\n"},
+	} {
+		script, err := completionScript(test.shell, test.program)
+		if err != nil || !strings.Contains(script, test.want) {
+			t.Errorf("%s as %q: %v, the script lacks %q", test.shell, test.program, err, test.want)
+		}
+		if strings.Contains(script, "{names}") {
+			t.Errorf("%s: a placeholder stayed in the script", test.shell)
+		}
+	}
+	b := newBench(t)
+	if out := b.ok("completion", "powershell"); !strings.Contains(out, "Register-ArgumentCompleter -Native -CommandName bh ") {
+		t.Errorf("powershell:\n%s", out)
+	}
+}
+
+// PowerShell cannot always hand a program an empty argument: it says "the
+// cursor is after a space" with a flag instead.
+func TestCompletionTakesTheNewWordAsAFlag(t *testing.T) {
+	b := newBench(t)
+	_, flagged, _ := b.run("__complete", "--new-word", "--", "token")
+	_, empty, _ := b.run("__complete", "--", "token", "")
+	if flagged != empty || !strings.Contains(flagged, "refresh\t") {
+		t.Errorf("--new-word:\n%s\nan empty word:\n%s", flagged, empty)
+	}
+	// Without it, the last word is the one being typed.
+	if got := b.completes("tok"); !slices.Equal(got, []string{"token"}) {
+		t.Errorf("a word being typed: %q", got)
 	}
 }

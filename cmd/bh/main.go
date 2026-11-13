@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"time"
@@ -30,7 +31,7 @@ func main() {
 	defer stop()
 	a := &app{
 		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
-		getenv: os.Getenv, goos: runtime.GOOS,
+		getenv: os.Getenv, goos: runtime.GOOS, program: filepath.Base(os.Args[0]),
 		dial: dialEngine, ssh: systemSSH, builder: engine.CLIBuilder{},
 		tool: runTool, lookPath: exec.LookPath, isTerminal: stdinIsTerminal, rawTerminal: rawTerminal, fullScreen: tui.Run,
 		osVault: func(prefix string) vault.Store { return vault.OS{Prefix: prefix} }, probeVault: vault.Probe,
@@ -68,6 +69,9 @@ type app struct {
 	stdout, stderr io.Writer
 	getenv         func(string) string
 	goos           string
+	// program is the name bh was started under ("bh", or the name of the
+	// file it was downloaded as).
+	program string
 
 	// dial connects to the engine; the returned function disconnects.
 	dial func(getenv func(string) string) (dockerEngine, func(), error)
@@ -184,8 +188,11 @@ const usageText = `usage: bh [command] [arguments]
   version             the build, and the Docker Engine bh talks to
   doctor [<env>]      check this machine's setup and, on the containers as
                       they are, the boundary of every environment (or of one)
-  completion zsh|bash print a completion script (eval it in the shell's rc)
+  completion zsh|bash|powershell
+                      print a completion script for the shell (bh completion
+                      <shell> says how to load it)
 
+  One command's part of this: bh help <command>, or bh <command> --help.
   Commands ask for nothing that was left out. Choosing is done with the
   Tab completion of the shell (bh completion), or in the full-screen
   UI that bh without arguments opens.
@@ -234,7 +241,17 @@ func (a *app) run(ctx context.Context, args []string) int {
 	name := args[0]
 	switch name {
 	case "help", "--help", "-h":
-		fmt.Fprint(a.stdout, usageText)
+		if name != "help" || len(args) == 1 {
+			fmt.Fprint(a.stdout, usageText)
+			return 0
+		}
+		// bh help <command>: that command's part.
+		text, has := commandHelp(args[1])
+		if !has {
+			fmt.Fprintf(a.stderr, "bh: unknown command %q\n\n%s", args[1], usageText)
+			return 2
+		}
+		fmt.Fprint(a.stdout, text)
 		return 0
 	case "--version", "-V":
 		name = "version"
@@ -244,11 +261,24 @@ func (a *app) run(ctx context.Context, args []string) int {
 		fmt.Fprintf(a.stderr, "bh: unknown command %q\n\n%s", name, usageText)
 		return 2
 	}
+	if helpWanted(name, args[1:]) {
+		if text, has := commandHelp(name); has {
+			fmt.Fprint(a.stdout, text)
+			return 0
+		}
+	}
 
 	// A command is taken at its word and asks for nothing it was not
 	// given: choosing is what the shell completion and the full-screen
 	// interface (bh without arguments) are for.
-	return a.finish(command(ctx, args[1:]))
+	err := command(ctx, args[1:])
+	if errors.Is(err, errHelpAsked) {
+		if text, has := commandHelp(name); has {
+			fmt.Fprint(a.stdout, text)
+			return 0
+		}
+	}
+	return a.finish(err)
 }
 
 // finish turns the way a command ended into the exit status, saying what

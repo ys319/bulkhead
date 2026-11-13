@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -11,7 +12,7 @@ import (
 	"github.com/ys319/bulkhead/internal/snapshot"
 )
 
-// `bh completion zsh|bash` prints a completion script for the shell's rc
+// `bh completion zsh|bash|powershell` prints a completion script for the shell's rc
 // file to eval. Nothing is written anywhere: an installed file would go
 // stale with the next bh, a script made by the binary that is in PATH
 // cannot.
@@ -279,6 +280,24 @@ type commandSpec struct {
 	subs []commandSpec
 }
 
+// helpTopics are the commands bh help can be asked about. The table cannot
+// name itself while it is being built, so the list is handed over at start.
+func helpTopics(*completing) []candidate { return topics() }
+
+var topics func() []candidate
+
+func init() {
+	topics = func() []candidate {
+		var out []candidate
+		for _, entry := range commandCandidates(completedCommands) {
+			if entry.name != "help" {
+				out = append(out, entry)
+			}
+		}
+		return out
+	}
+}
+
 var completedCommands = []commandSpec{
 	{name: "create", about: "define a new environment", args: []argument{nil},
 		flags: []flagSpec{valued("--from", localEnvs), valued("--port", nil), plain("--publish"), valued("--restart", restarts)}},
@@ -351,8 +370,8 @@ var completedCommands = []commandSpec{
 	{name: "migrate", about: "take over an environment of the TypeScript version", args: []argument{nil},
 		flags: []flagSpec{yesFlag, plain("--undo")}},
 	{name: "version", about: "the build, and the Docker Engine bh talks to"},
-	{name: "completion", about: "print a shell completion script", args: []argument{oneOf("zsh", "bash")}},
-	{name: "help", about: "show usage"},
+	{name: "completion", about: "print a shell completion script", args: []argument{oneOf(completionShells...)}},
+	{name: "help", about: "how bh, or one command, is used", args: []argument{helpTopics}},
 }
 
 // topLevelFlags are offered for a dash where the command goes. The short
@@ -471,8 +490,18 @@ func (a *app) candidates(current string, before []string) []candidate {
 // in the middle of a command line being typed helps nobody. It is not in
 // the usage text; it is the scripts' business.
 func (a *app) completeLine(_ context.Context, args []string) error {
+	// --new-word: the cursor is after a space, so the word to complete is
+	// an empty one. A shell that cannot pass an empty argument to a
+	// program (older PowerShell) says it this way.
+	newWord := false
+	if len(args) > 0 && args[0] == "--new-word" {
+		newWord, args = true, args[1:]
+	}
 	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
+	}
+	if newWord {
+		args = append(args, "")
 	}
 	for _, entry := range a.complete(args) {
 		switch {
@@ -487,11 +516,14 @@ func (a *app) completeLine(_ context.Context, args []string) error {
 	return nil
 }
 
+// completionShells are the shells bh has a script for.
+var completionShells = []string{"zsh", "bash", "powershell"}
+
 func (a *app) completion(_ context.Context, args []string) error {
 	if len(args) != 1 {
-		return usagef("usage: bh completion zsh|bash")
+		return usagef("usage: bh completion %s", strings.Join(completionShells, "|"))
 	}
-	script, err := completionScript(args[0])
+	script, err := completionScript(args[0], a.program)
 	if err != nil {
 		return err
 	}
@@ -499,25 +531,40 @@ func (a *app) completion(_ context.Context, args []string) error {
 	return nil
 }
 
-func completionScript(shell string) (string, error) {
+// A program name as the scripts can carry it: letters, digits, dot, dash
+// and underscore.
+var programName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// completionScript is the script for the shell. It registers itself for
+// "bh" and, when this program runs under another name (bh-darwin-arm64,
+// before it is installed as bh), for that name too. Whichever name is
+// typed is the program the script asks.
+func completionScript(shell, program string) (string, error) {
+	program = strings.TrimSuffix(program, ".exe")
+	names := []string{"bh"}
+	if program != "bh" && programName.MatchString(program) {
+		names = append(names, program)
+	}
 	switch shell {
 	case "zsh":
-		return zshCompletion, nil
+		return strings.ReplaceAll(zshCompletion, "{names}", strings.Join(names, " ")), nil
 	case "bash":
-		return bashCompletion, nil
+		return strings.ReplaceAll(bashCompletion, "{names}", strings.Join(names, " ")), nil
+	case "powershell", "pwsh":
+		return strings.ReplaceAll(powershellCompletion, "{names}", strings.Join(names, ", ")), nil
 	}
-	return "", usagef("completion: %q is not a supported shell (zsh, bash)", shell)
+	return "", usagef("completion: %q is not a supported shell (%s)", shell, strings.Join(completionShells, ", "))
 }
 
 // The scripts only carry the command line to bh and its answer back. zsh
-// shows the descriptions; bash has no place for them.
+// and PowerShell show the descriptions; bash has no place for them.
 const zshCompletion = `# bh completion (zsh) — add to your ~/.zshrc:
 #   eval "$(bh completion zsh)"
 
 _bh() {
   local -a lines described bare
   local line name
-  lines=("${(@f)$(command bh __complete -- "${(@)words[2,CURRENT]}" 2>/dev/null)}")
+  lines=("${(@f)$(command "${words[1]}" __complete -- "${(@)words[2,CURRENT]}" 2>/dev/null)}")
   if [[ ${lines[1]} == __files__ ]]; then
     _files
     return
@@ -537,7 +584,7 @@ _bh() {
   (( ${#described} + ${#bare} ))
 }
 
-compdef _bh bh
+compdef _bh {names}
 `
 
 const bashCompletion = `# bh completion (bash) — add to your ~/.bashrc:
@@ -546,7 +593,7 @@ const bashCompletion = `# bh completion (bash) — add to your ~/.bashrc:
 _bh() {
   local IFS=$'\n'
   local -a lines
-  lines=($(command bh __complete -- "${COMP_WORDS[@]:1:COMP_CWORD}" 2>/dev/null))
+  lines=($(command "${COMP_WORDS[0]}" __complete -- "${COMP_WORDS[@]:1:COMP_CWORD}" 2>/dev/null))
   COMPREPLY=()
   if [[ ${lines[0]} == __files__ ]]; then
     compopt -o filenames 2>/dev/null
@@ -559,5 +606,47 @@ _bh() {
   done
 }
 
-complete -F _bh bh
+complete -F _bh {names}
+`
+
+// PowerShell (5.1 and later). An empty argument does not reach a program
+// from every version of it, so "the cursor is after a space" travels as
+// --new-word. Where a file's name goes the script returns nothing, which
+// is what makes PowerShell complete file names. It does the same where bh
+// has nothing to offer (a new name, a value): returning an empty result
+// to hold PowerShell back makes 7.6 throw, and file names there do no
+// harm.
+const powershellCompletion = `# bh completion (PowerShell) — add to your $PROFILE:
+#   bh completion powershell | Out-String | Invoke-Expression
+
+Register-ArgumentCompleter -Native -CommandName {names} -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    $elements = @($commandAst.CommandElements)
+    $program = $elements[0].Extent.Text
+    $given = @()
+    foreach ($element in ($elements | Select-Object -Skip 1)) {
+        if ($element.Extent.EndOffset -gt $cursorPosition) { break }
+        if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            $given += $element.Value
+        } else {
+            $given += $element.Extent.Text
+        }
+    }
+    $mark = @()
+    if ("$wordToComplete" -eq '') { $mark = @('--new-word') }
+    $encoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        $lines = @(& $program __complete @mark -- @given 2>$null)
+    } finally {
+        [Console]::OutputEncoding = $encoding
+    }
+    if ($lines.Count -eq 1 -and $lines[0] -eq '__files__') { return }
+    foreach ($line in $lines) {
+        if (-not $line) { continue }
+        $name, $about = $line -split "` + "`" + `t", 2
+        if (-not $about) { $about = $name }
+        [System.Management.Automation.CompletionResult]::new($name, $name, 'ParameterValue', $about)
+    }
+}
 `
