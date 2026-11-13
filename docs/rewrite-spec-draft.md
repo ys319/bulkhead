@@ -896,7 +896,6 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | GitHub トークン (手) | `revoke`、`destroy` 時の失効、git と gh から使えること。Windows のコンソールでの非表示入力 |
 | restart --rebuild (手) | `--pull --no-cache` で作り直され、コンテナが新しいイメージで起動する |
 | GPU (手・対応機のみ) | legacy / cdi の起動、`bh gpu list`、デバイスノードの gid |
-| 補完 (手) | `eval "$(bh completion zsh)"` / bash で、コマンド・サブコマンド・環境名が補完される |
 | events (手) | TUI を開いたまま別の端末で `bh up` / `bh down` → 一覧が追従する |
 | migrate の追加分 (手) | dev.Dockerfile・トークン・init.sh を持つ TS 版の環境の移行 |
 | Windows (手) | named pipe への接続、`init.sh` の bind（ドライブレターつきのパス。doctor の照合も）、root-shell、TUI |
