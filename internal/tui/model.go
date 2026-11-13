@@ -206,17 +206,81 @@ func (m *Model) doThen(title string, stay bool, work func(progress io.Writer) (t
 // is) — after the return the full screen covers whatever the program
 // printed, so a failure would otherwise look like nothing happened.
 func (m *Model) shellOut(what string, command *exec.Cmd, err error, failed func(error) bool, then func(m *Model)) tea.Cmd {
+	return m.handOver(&handover{what: what, command: command, failed: failed}, err, then)
+}
+
+// handOver is shellOut for a handover made by the caller. err is why there
+// is no program to run.
+func (m *Model) handOver(to *handover, err error, then func(m *Model)) tea.Cmd {
 	m.closeAll()
 	if err != nil {
 		m.say(red, "%s", err.Error())
 		return nil
 	}
-	return tea.ExecProcess(command, func(err error) tea.Msg {
-		if err != nil && failed != nil && !failed(err) {
-			err = nil
-		}
-		return execDoneMsg{what: what, err: err, then: then}
+	return tea.Exec(to, func(err error) tea.Msg {
+		return execDoneMsg{what: to.what, err: err, then: then}
 	})
+}
+
+// handover is a program that gets the plain terminal. When it ends in a
+// way worth a message, the terminal stays as the program left it until the
+// user presses Enter: what it printed — ssh's warning about a changed host
+// key, a compiler's complaint — is the explanation, and the full screen
+// would cover it at once.
+type handover struct {
+	what    string
+	command *exec.Cmd
+	// failed: see shellOut.
+	failed func(error) bool
+	// intro is printed before the program starts: how to get back, where
+	// the program itself does not say.
+	intro string
+	in    io.Reader
+	out   io.Writer
+}
+
+func (h *handover) SetStdin(r io.Reader) {
+	h.in = r
+	if h.command.Stdin == nil {
+		h.command.Stdin = r
+	}
+}
+
+func (h *handover) SetStdout(w io.Writer) {
+	h.out = w
+	if h.command.Stdout == nil {
+		h.command.Stdout = w
+	}
+}
+
+func (h *handover) SetStderr(w io.Writer) {
+	if h.command.Stderr == nil {
+		h.command.Stderr = w
+	}
+}
+
+func (h *handover) Run() error {
+	if h.intro != "" {
+		fmt.Fprintln(h.out, h.intro)
+	}
+	err := h.command.Run()
+	if err == nil || (h.failed != nil && !h.failed(err)) {
+		return nil
+	}
+	fmt.Fprintf(h.out, "\n%s failed (%v). Press Enter to return to bh.", h.what, err)
+	waitForEnter(h.in)
+	return err
+}
+
+// waitForEnter reads until the end of a line (or of the input).
+func waitForEnter(in io.Reader) {
+	buffer := make([]byte, 1)
+	for {
+		n, err := in.Read(buffer)
+		if err != nil || (n == 1 && (buffer[0] == '\n' || buffer[0] == '\r')) {
+			return
+		}
+	}
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -298,7 +362,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case execDoneMsg:
 		if msg.err != nil {
-			m.say(red, "%s failed (%v) — its output is in the terminal behind this screen", msg.what, msg.err)
+			m.say(red, "%s failed (%v)", msg.what, msg.err)
 		}
 		if msg.then != nil {
 			msg.then(m)

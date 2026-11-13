@@ -924,3 +924,38 @@ func TestDoctorShowsInTheDetailAndInTheNameColor(t *testing.T) {
 		t.Errorf("stopped, the name is %+v", got)
 	}
 }
+
+// A program that fails keeps the terminal until Enter, so that what it
+// printed can be read; one that ends well, or in a way that is not ours to
+// judge, gives the screen back at once.
+func TestHandoverWaitsAfterAFailure(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	run := func(script string, failed func(error) bool, intro string) (err error, out string, unread string) {
+		in := strings.NewReader("\nrest")
+		var written strings.Builder
+		h := &handover{what: "the thing", command: exec.Command("sh", "-c", script), failed: failed, intro: intro}
+		h.command.Stdin = strings.NewReader("") // the program itself reads nothing
+		h.SetStdin(in)
+		h.SetStdout(&written)
+		h.SetStderr(io.Discard)
+		err = h.Run()
+		rest, _ := io.ReadAll(in)
+		return err, written.String(), string(rest)
+	}
+
+	err, out, unread := run("echo WARNING; exit 255", nil, "")
+	if err == nil || !strings.Contains(out, "WARNING") || !strings.Contains(out, "Press Enter to return") || unread != "rest" {
+		t.Errorf("failure: err=%v out=%q unread=%q", err, out, unread)
+	}
+	err, out, unread = run("exit 0", nil, "Ctrl-C returns")
+	if err != nil || out != "Ctrl-C returns\n" || unread != "\nrest" {
+		t.Errorf("success: err=%v out=%q unread=%q", err, out, unread)
+	}
+	// The status of a shell is the shell's own business.
+	err, out, unread = run("exit 3", func(error) bool { return false }, "")
+	if err != nil || out != "" || unread != "\nrest" {
+		t.Errorf("not ours to judge: err=%v out=%q unread=%q", err, out, unread)
+	}
+}

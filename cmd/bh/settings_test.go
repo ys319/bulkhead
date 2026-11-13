@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/ys319/bulkhead/internal/config"
 	"github.com/ys319/bulkhead/internal/sshkey"
+	"github.com/ys319/bulkhead/internal/tui"
 )
 
 // publicKey makes a real public key line with the comment.
@@ -279,7 +281,7 @@ func TestOpenStartsVSCodeThroughTheSSHEntry(t *testing.T) {
 	}
 	b.ok("up", "web")
 	b.ok("open", "web")
-	if !slices.Contains(b.tools, "code --remote ssh-remote+bulkhead-web") {
+	if !slices.Contains(b.tools, "code --remote ssh-remote+bulkhead-web /home/developer/workspace") {
 		t.Errorf("tools = %v", b.tools)
 	}
 	if !strings.Contains(b.sshFragment(), "Host bulkhead-web") {
@@ -360,5 +362,26 @@ func TestACommandWithoutAnEnvironmentAsksWhich(t *testing.T) {
 	b.picks = ""
 	if code, _, stderr := b.run("down"); code != 1 || stderr != "" {
 		t.Errorf("cancelled: exit %d, stderr %q", code, stderr)
+	}
+}
+
+// Ctrl-C cancels the context of a command. The interface must not go with
+// it: the interrupt is for the program it handed the terminal to (bh logs).
+func TestInterfaceOutlivesAnInterrupt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	alive := false
+	a := &app{
+		isTerminal: func() bool { return true },
+		fullScreen: func(ctx context.Context, _ tui.Backend) error {
+			alive = ctx.Err() == nil
+			return nil
+		},
+	}
+	if err := a.interactive(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !alive {
+		t.Error("the interface got a context that an interrupt ends")
 	}
 }

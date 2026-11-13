@@ -189,7 +189,10 @@ func (m *Model) maintenanceMenu(id, name string) *menu {
 		if exists {
 			items = append(items, item{label: "Logs", run: func(m *Model) tea.Cmd {
 				command, err := m.backend.Self("logs", name)
-				return m.shellOut("logs", command, err, nil, nil)
+				// Following has no end of its own, and nothing on the plain
+				// terminal says how to leave it.
+				return m.handOver(&handover{what: "logs", command: command,
+					intro: fmt.Sprintf("Following the logs of %q — Ctrl-C returns to bh.", name)}, err, nil)
 			}})
 		}
 		items = append(items, item{label: "Edit Dockerfile", run: func(m *Model) tea.Cmd {
@@ -777,11 +780,6 @@ func (p *printout) SetStderr(io.Writer)   {}
 
 func (p *printout) Run() error {
 	fmt.Fprintln(p.out, p.text)
-	buffer := make([]byte, 1)
-	for {
-		n, err := p.in.Read(buffer)
-		if err != nil || (n == 1 && (buffer[0] == '\n' || buffer[0] == '\r')) {
-			return nil
-		}
-	}
+	waitForEnter(p.in)
+	return nil
 }

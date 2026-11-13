@@ -26,7 +26,12 @@ func (a *app) interactive(ctx context.Context) error {
 	if !a.isTerminal() {
 		return usagef("bh without arguments opens the full-screen interface, which needs a terminal\n\n%s", usageText)
 	}
-	return tui.Run(ctx, backend{a})
+	// ctx ends on Ctrl-C, which is right for a command and wrong here: the
+	// interrupt is meant for the program that has the terminal at that
+	// moment (bh logs, started from the menu), and the interface must still
+	// be there when that program is gone. At the keyboard of the interface
+	// itself Ctrl-C is a key.
+	return a.fullScreen(context.WithoutCancel(ctx), backend{a})
 }
 
 // backend is what the full-screen interface acts through: the same

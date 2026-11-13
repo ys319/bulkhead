@@ -31,7 +31,7 @@ func main() {
 		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
 		getenv: os.Getenv, goos: runtime.GOOS,
 		dial: dialEngine, ssh: systemSSH, builder: engine.CLIBuilder{},
-		tool: runTool, lookPath: exec.LookPath, isTerminal: stdinIsTerminal, rawTerminal: rawTerminal, pick: tui.Pick,
+		tool: runTool, lookPath: exec.LookPath, isTerminal: stdinIsTerminal, rawTerminal: rawTerminal, pick: tui.Pick, fullScreen: tui.Run,
 		httpClient: newHTTPClient(), openURL: openInBrowser, readSecret: readHiddenLine, now: time.Now,
 	}
 	os.Exit(a.run(ctx, os.Args[1:]))
@@ -81,6 +81,8 @@ type app struct {
 	rawTerminal func() (restore func(), size func() (height, width uint), err error)
 	// pick asks the user to choose from a list.
 	pick func(ctx context.Context, title string, choices []tui.Choice) (string, error)
+	// fullScreen shows the interface of bh without arguments (tui.Run).
+	fullScreen func(ctx context.Context, backend tui.Backend) error
 
 	// httpClient reaches the services tokens come from (GitHub's API).
 	httpClient *http.Client
