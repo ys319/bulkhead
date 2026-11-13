@@ -21,7 +21,9 @@ KEEP=${2:-}
 NAME=verify-features
 PORT=${BH_VERIFY_PORT:-23951}
 
-WORK=$(mktemp -d)
+# Without a directory of its own nothing below may run: the configuration
+# would be /config, a place this script did not make and does not own.
+WORK=$(mktemp -d) && [ -d "$WORK" ] || { echo "cannot make a work directory" >&2; exit 1; }
 export BH_CONFIG_DIR=$WORK/config
 export BH_SSH_CONFIG=$WORK/ssh/config
 # Git Bash (MSYS) rewrites arguments that look like absolute paths.
