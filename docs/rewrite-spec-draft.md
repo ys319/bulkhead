@@ -652,6 +652,8 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | events (手) | TUI を開いたまま別の端末で `bh up` / `bh down` → 一覧が追従する |
 | migrate の追加分 (手) | dev.Dockerfile・トークン・init.sh を持つ TS 版の環境の移行 |
 | Windows (手) | named pipe への接続、`init.sh` の bind（ドライブレターつきのパス。doctor の照合も）、root-shell、TUI |
+| スナップショット | `scripts/verify-snapshots.sh <bh>` — snapshot / rollback / export・import / archive・unarchive。**一度も実機で動いていない。** 特に: tar の読み書き（所有者・モード・リンク）、外したパスが残ること、新しいボリュームにイメージの home が入ってから展開されること、戻した後に nix が動いて init.sh が走り直すこと、ボリュームを空にするスクリプト（ここのテストでは既定で走らせていない） |
+| スナップショット (手) | TUI の Snapshot / Roll back / Archive / Unarchive。大きな workspace での所要時間 |
 
 作り直すときに入れる要望（2026-11-13）:
 
@@ -659,8 +661,6 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
   発行し直す流れが要る。いまは `bh github set` を最初からやり直すしかない。§6・§7 の再設計と
   一緒に決める。
 
-| スナップショット | `scripts/verify-snapshots.sh <bh>` — snapshot / rollback / export・import / archive・unarchive。**一度も実機で動いていない。** 特に: tar の読み書き（所有者・モード・リンク）、外したパスが残ること、新しいボリュームにイメージの home が入ってから展開されること、戻した後に nix が動いて init.sh が走り直すこと、ボリュームを空にするスクリプト（ここのテストでは既定で走らせていない） |
-| スナップショット (手) | TUI の Snapshot / Roll back / Archive / Unarchive。大きな workspace での所要時間 |
 
 残り: `prune` / `--json`（形を決めてから — TS 版の形は compose の座標を
 含んでいて、そのままは移せない）/ Releases への自動ビルド / §6・§7 の再設計 / ビルドの経路の
