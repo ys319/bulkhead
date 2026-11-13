@@ -959,3 +959,24 @@ func TestHandoverWaitsAfterAFailure(t *testing.T) {
 		t.Errorf("not ours to judge: err=%v out=%q unread=%q", err, out, unread)
 	}
 }
+
+// A menu is as wide as what it says, not as wide as the screen: the values
+// at the right edge of its rows must not stretch it.
+func TestMenuWithValuesStaysNarrow(t *testing.T) {
+	s := start(t)
+	s.Update(tea.WindowSizeMsg{Width: 200, Height: 50})
+	narrow := &menu{name: "Runtime", build: func(*Model) []item {
+		return []item{{label: "Restart", value: "unless-stopped"}, {label: "GPU", value: "off"}, {separator: true}, {label: "Save and close"}}
+	}}
+	for _, line := range s.dialog(narrow) {
+		if w := width(line); w != 40 {
+			t.Fatalf("a dialog line is %d cells wide, want the minimum of 40: %q", w, sanitize(line))
+		}
+	}
+	wide := &menu{name: "Keys", build: func(*Model) []item {
+		return []item{{label: strings.Repeat("k", 50), value: "attached"}}
+	}}
+	if w := width(s.dialog(wide)[0]); w != 2+50+3+len("attached")+4 {
+		t.Errorf("a menu with a long row is %d cells wide", w)
+	}
+}

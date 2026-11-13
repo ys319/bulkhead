@@ -106,6 +106,8 @@ func (m *Model) dialog(d modal) []string {
 	inner := 36
 	if _, working := d.(*busy); working {
 		inner = 56
+	} else if sized, ok := d.(interface{ natural(*Model, int) int }); ok {
+		inner = max(inner, sized.natural(m, widest))
 	} else {
 		for _, line := range d.lines(m, widest) {
 			if strings.Trim(sanitize(line), "─ ") == "" {

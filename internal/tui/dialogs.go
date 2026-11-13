@@ -70,6 +70,29 @@ func (d *menu) items(m *Model) []item {
 	return items
 }
 
+// natural is the width the menu needs. Its lines cannot tell: a row with a
+// value puts the value at the right edge of whatever width it is given, so
+// measured at the widest the dialog may be, it is that wide.
+func (d *menu) natural(m *Model, widest int) int {
+	most := 0
+	for _, note := range d.note {
+		for _, line := range wrap(note, widest) {
+			most = max(most, width(line))
+		}
+	}
+	for _, it := range d.items(m) {
+		if it.separator {
+			continue
+		}
+		needs := 2 + width(it.label)
+		if it.value != "" {
+			needs += 3 + width(it.value)
+		}
+		most = max(most, needs)
+	}
+	return most
+}
+
 func (d *menu) lines(m *Model, inner int) []string {
 	var lines []string
 	for _, note := range d.note {
