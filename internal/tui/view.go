@@ -19,10 +19,16 @@ func (m *Model) View() tea.View {
 	return view
 }
 
-// screen draws everything: the two panes, the status line with the key
-// hints, the message line, and the dialog on top.
+// screen draws everything, top to bottom: the two panes, the message (only
+// when there is one), the line of key hints, and the dialog on top. The
+// hints are last so that they stay where they are when a message comes and
+// goes; the panes give up the row.
 func (m *Model) screen() []string {
-	bodyRows := m.height - 2
+	note := m.noteLine()
+	bodyRows := m.height - 1
+	if note != "" {
+		bodyRows--
+	}
 	if bodyRows < 5 {
 		bodyRows = 5
 	}
@@ -36,8 +42,11 @@ func (m *Model) screen() []string {
 	right := box(m.detail(detailInner, bodyRows-2), detailInner, bodyRows)
 	lines := sideBySide(left, right)
 
-	// The status line: what is wrong with live updates on the left, the
-	// keys that work now on the right.
+	if note != "" {
+		lines = append(lines, note)
+	}
+	// The last line: what is wrong with live updates on the left, the keys
+	// that work now on the right.
 	notice := ""
 	if m.degraded {
 		notice = "live updates degraded — press r to refresh"
@@ -47,12 +56,14 @@ func (m *Model) screen() []string {
 	if gap < 1 {
 		gap = 1
 	}
-	lines = append(lines, dim(notice)+strings.Repeat(" ", gap)+dim(hint), m.noteLine())
+	lines = append(lines, dim(notice)+strings.Repeat(" ", gap)+dim(hint))
 
 	if d := m.top(); d != nil {
 		dialog := m.dialog(d)
 		x := (m.width - width(dialog[0])) / 2
-		y := (bodyRows - len(dialog)) / 2
+		// Centred on the screen, not on the panes: a message that comes or
+		// goes must not move a dialog that is open.
+		y := (m.height - 1 - len(dialog)) / 2
 		if x < 0 {
 			x = 0
 		}

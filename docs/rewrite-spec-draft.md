@@ -523,13 +523,16 @@ exec の端末接続が Windows 固有の不確定要素）。
   - 値つきの行があるメニュー（Runtime など）が画面いっぱいに広がった。
   - スクリプト側の間違い2つ（`bh init` の再実行の行数の読み方、トークンの検査が飛ばされる）。
 
+**修正後の再実行（同日、`07c050d` のビルド）: 55 項目通過・失敗 0**（飛ばしたのは手で見る
+`bh github set` だけ）。境界は 54 項目すべて通過。これで初めて通ったもの: 起動直後の環境で
+doctor が何も出さない / `bh token set` が新しいシェルに届き `remove` で消える（所有者 uid 1000・
+モード 600）/ `bh init` の再実行。
+
 **まだ実機で確かめていないもの。** (手) は手で見るしかないもの。
 
 | 対象 | 確かめること |
 | --- | --- |
-| 上の修正 | doctor が起動直後の環境で fail も warn も出さない / `bh open` が新しいウィンドウを開く / TUI の Logs から Ctrl-C で TUI へ戻る / 失敗した ssh の後で Enter を待つ / `HostKeyAlias` つきの項目で VS Code Remote SSH がつながる / メニューの幅 |
-| トークンの書き込み | `bh token set` が新しいシェルに届き、`remove` で消える。所有者とモード（uid 1000・600）。スクリプトの間違いで飛ばされていた（`bh github set` は同じ書き込みの経路を通り、手で通っている） |
-| init.sh の再実行 | `bh init` の後で2回目が走っている（コマンドは成功。行数の検査がスクリプトの間違いで失敗していた） |
+| 上の修正 (手) | `bh open` が新しいウィンドウを開く / TUI の Logs から Ctrl-C で TUI へ戻る / 失敗した ssh の後で Enter を待つ / `HostKeyAlias` つきの項目で VS Code Remote SSH がつながる / メニューの幅 / 下段の並び（メッセージ → 操作説明） |
 | GitHub トークン (手) | `revoke`、`destroy` 時の失効、git と gh から使えること。Windows のコンソールでの非表示入力 |
 | restart --rebuild (手) | `--pull --no-cache` で作り直され、コンテナが新しいイメージで起動する |
 | GPU (手・対応機のみ) | legacy / cdi の起動、`bh gpu list`、デバイスノードの gid |

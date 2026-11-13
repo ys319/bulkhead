@@ -980,3 +980,24 @@ func TestMenuWithValuesStaysNarrow(t *testing.T) {
 		t.Errorf("a menu with a long row is %d cells wide", w)
 	}
 }
+
+// The key hints are the last line whether or not there is a message; the
+// message takes a row from the panes, right above the hints, and gives it
+// back when it goes. No row is left empty.
+func TestMessageSitsAboveTheHints(t *testing.T) {
+	s := start(t)
+	s.Update(tea.WindowSizeMsg{Width: 110, Height: 30})
+	plain := func(line string) string { return strings.TrimSpace(sanitize(line)) }
+
+	quiet := s.screen()
+	if len(quiet) != 30 || !strings.Contains(plain(quiet[29]), "q quit") || !strings.HasPrefix(plain(quiet[28]), "└") {
+		t.Errorf("without a message: %d lines, last two %q / %q", len(quiet), plain(quiet[28]), plain(quiet[29]))
+	}
+
+	s.say(red, "%s", "something went wrong\nwith details")
+	loud := s.screen()
+	if len(loud) != 30 || !strings.Contains(plain(loud[29]), "q quit") ||
+		!strings.HasPrefix(plain(loud[28]), "something went wrong") || !strings.HasPrefix(plain(loud[27]), "└") {
+		t.Errorf("with a message: %d lines, last three %q / %q / %q", len(loud), plain(loud[27]), plain(loud[28]), plain(loud[29]))
+	}
+}
