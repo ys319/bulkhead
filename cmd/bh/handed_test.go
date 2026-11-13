@@ -411,62 +411,47 @@ func TestTokenSetRefuses(t *testing.T) {
 	}
 }
 
-func TestTokenStepsAreAskedForWhenLeftOut(t *testing.T) {
+// Arguments are not asked for: what is missing is said, with what there is
+// to choose from — the shell's completion is where choosing happens.
+func TestTokenArgumentsAreNotAskedFor(t *testing.T) {
 	b := newBench(t)
 	b.ok("create", "web")
-	b.ok("create", "api")
 	b.web.Accept("octo")
+	b.typing, b.secret, b.picks = true, patNew, "web"
 
-	// Away from a terminal, what is missing is named.
-	b.stdin = patNew
-	for args, missing := range map[string]string{"": "the environment", "web": "the service", "web github": "the preset"} {
+	for args, part := range map[string]string{
+		"":           "usage: bh token set <env> <service>",
+		"web":        "services: github | huggingface",
+		"web github": "usage: bh token set web github <preset>",
+	} {
 		words := append([]string{"token", "set", "--no-open"}, strings.Fields(args)...)
-		if err := b.fails(2, words...); !strings.Contains(err, missing+" is missing") && !strings.Contains(err, missing+" (") {
+		if err := b.fails(2, words...); !strings.Contains(err, part) {
 			t.Errorf("bh token set %s: %s", args, err)
 		}
 	}
-
-	// At a terminal each missing step is asked for, in order: environment,
-	// service, preset — and, once a conversation is going, the owner.
-	b.typing, b.secret = true, patNew
-	b.answers = []string{"api", "github", "contribute"}
-	b.stdin = "acme\n"
-	b.offered = nil
-	out := b.ok("token", "set", "--no-open")
-	if !slices.Equal(b.offered, []string{"api", "web", "github", "huggingface", "read", "push", "contribute"}) {
-		t.Errorf("offered %v", b.offered)
+	// Without a preset, the presets are listed with what each allows.
+	if err := b.fails(2, "token", "set", "web", "github"); !strings.Contains(err, "contribute") || !strings.Contains(err, "also push") {
+		t.Errorf("the presets are not listed: %s", err)
 	}
-	if got := b.tokenOf("api", "github"); got == nil || got.Preset != "contribute" || got.Owner != "acme" {
-		t.Errorf("record = %+v\n%s", got, out)
+	if b.asked != "" || len(b.offered) != 0 || len(b.tokens("web")) != 0 {
+		t.Errorf("something was asked (%q, %v) or kept", b.asked, b.offered)
 	}
 
-	// Given the environment, the rest is asked.
-	b.answers, b.offered, b.stdin = []string{"github", "read"}, nil, "\n"
-	b.ok("token", "set", "web", "--no-open")
-	if !slices.Equal(b.offered, []string{"github", "huggingface", "read", "push", "contribute"}) {
-		t.Errorf("offered %v", b.offered)
-	}
-	if got := b.tokenOf("web", "github"); got == nil || got.Preset != "read" || got.Owner != "octo" {
-		t.Errorf("record = %+v", got)
-	}
-
-	// Everything given: nothing is asked, the owner included.
+	// The service may be left out where there is one token only.
+	b.ok("token", "set", "web", "github", "read", "--no-open")
 	b.web.Revocable()
-	b.secret, b.offered, b.stdin = patNext, nil, ""
-	b.ok("token", "set", "web", "github", "push", "--no-open")
-	if len(b.offered) != 0 || b.tokenOf("web", "github").Owner != "octo" {
-		t.Errorf("asked %v, owner %q", b.offered, b.tokenOf("web", "github").Owner)
+	b.secret = patNext
+	b.ok("token", "refresh", "web", "--no-open")
+	b.web.HuggingFace("me", "read")
+	b.secret = hfToken
+	b.ok("token", "set", "web", "huggingface", "--no-open")
+	for _, command := range []string{"refresh", "remove"} {
+		if err := b.fails(2, "token", command, "web"); !strings.Contains(err, "tokens of github and huggingface: say which") {
+			t.Errorf("bh token %s web with two tokens: %s", command, err)
+		}
 	}
-
-	// A service without presets has no third question.
-	b.web.HuggingFace("me", "write")
-	b.secret, b.answers, b.offered = hfToken, []string{"huggingface"}, nil
-	b.ok("token", "set", "web", "--no-open")
-	if !slices.Equal(b.offered, []string{"github", "huggingface"}) {
-		t.Errorf("offered %v", b.offered)
-	}
-	if got := b.tokenOf("web", "huggingface"); got == nil || got.Access != "write" || got.Owner != "me" || got.Preset != "" {
-		t.Errorf("record = %+v", got)
+	if b.asked != "" {
+		t.Errorf("asked %q", b.asked)
 	}
 }
 
@@ -475,7 +460,7 @@ func TestTokenRefreshKeepsWhatWasAskedFor(t *testing.T) {
 	b.now = time.Date(2026, 10, 12, 15, 30, 0, 0, time.UTC)
 	b.ok("create", "web")
 	id := b.env("web").ID
-	if err := b.fails(1, "token", "refresh", "web", "--no-open"); !strings.Contains(err, "no tokens to refresh") {
+	if err := b.fails(1, "token", "refresh", "web", "--no-open"); !strings.Contains(err, "has no tokens") {
 		t.Errorf("nothing to refresh: %s", err)
 	}
 	b.web.Accept("octo", "github-authentication-token-expiration", "2026-11-11 15:30:00 UTC")
@@ -571,7 +556,7 @@ func TestTokenRemoveRevokes(t *testing.T) {
 	b := newBench(t)
 	b.ok("create", "web")
 	id := b.env("web").ID
-	if err := b.fails(1, "token", "remove", "web", "github", "--yes"); !strings.Contains(err, "has no tokens") {
+	if err := b.fails(1, "token", "remove", "web", "github", "--yes"); !strings.Contains(err, "has no GitHub token") {
 		t.Errorf("nothing to remove: %s", err)
 	}
 	b.ok("up", "web")

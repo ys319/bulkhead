@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -378,11 +377,6 @@ func (a *app) credentialLeftovers(ctx context.Context, store config.Store, id, n
 	}
 	_, revokeWarnings := a.revokeTokens(ctx, creds, false)
 	return append(warnings, revokeWarnings...)
-}
-
-// readLine reads one line of what the user types.
-func readLine(in io.Reader) (string, error) {
-	return bufio.NewReader(in).ReadString('\n')
 }
 
 // notYet words a change that is saved but not in the environment.

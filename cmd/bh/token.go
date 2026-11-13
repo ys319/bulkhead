@@ -15,7 +15,6 @@ import (
 	"github.com/ys319/bulkhead/internal/config"
 	"github.com/ys319/bulkhead/internal/github"
 	"github.com/ys319/bulkhead/internal/huggingface"
-	"github.com/ys319/bulkhead/internal/tui"
 	"github.com/ys319/bulkhead/internal/vault"
 )
 
@@ -23,19 +22,20 @@ const tokenUsage = `usage: bh token <subcommand>
 
   token list [<env>]        the tokens of <env> (or of every environment):
                             service, access, owner, expiry
-  token set [<env>] [<service>] [<preset>] [--owner <user|org>] [--days <n>] [--no-open]
+  token set <env> <service> [<preset>] [--owner <user|org>] [--days <n>] [--no-open]
                             get a token from the service for <env>: opens its
                             page (filled in where the service allows), then
                             reads the token (hidden; or from stdin). A token
                             the environment already has from that service is
                             replaced, and revoked
-  token refresh [<env>] [<service>] [--no-open]
+  token refresh <env> [<service>] [--no-open]
                             the same token again with a new value and expiry:
                             regenerate it on the service's page, paste it here
-  token remove [<env>] [<service>] [--yes]
+  token remove <env> [<service>] [--yes]
                             take the token out of <env> and revoke it
 
-  At a terminal, what is left out is asked for, in that order.
+  <service> can be left out where <env> has one token only. Shell
+  completion offers the services and presets (bh completion).
 
   services and presets:
     github        read        clone and fetch private repositories
@@ -99,22 +99,6 @@ func (s tokenService) presetNames() []string {
 		names[i] = preset.Name
 	}
 	return names
-}
-
-// choose asks for an argument that was left out: at a terminal, from the
-// choices; anywhere else that is a usage error which names what is missing.
-func (a *app) choose(ctx context.Context, usage, missing, title string, choices []tui.Choice) (string, error) {
-	if !a.isTerminal() {
-		return "", usagef("usage: bh %s\n(%s is missing; at a terminal it is asked for)", usage, missing)
-	}
-	if len(choices) == 0 {
-		return "", usagef("usage: bh %s\n(there is nothing to choose %s from)", usage, missing)
-	}
-	picked, err := a.pick(ctx, title, choices)
-	if errors.Is(err, tui.ErrNothingPicked) {
-		return "", exitCode(1)
-	}
-	return picked, err
 }
 
 // tokenSummary is a token in one line: "push · octo · 2 repos · expires in 12d".
@@ -602,34 +586,35 @@ func (a *app) tokenList(args []string) error {
 	return nil
 }
 
-// tokenEnvironment is the first step of every token command: which
-// environment. Asked for when left out.
-func (a *app) tokenEnvironment(ctx context.Context, usage string, words []string, having string) (config.Store, config.Environment, []string, error) {
-	store, cfg, err := a.load()
-	if err != nil {
-		return store, config.Environment{}, nil, err
-	}
+// serviceOf is the service a command was given — or, when it was given
+// none, the one service the environment has a token of. With several, it
+// has to be named.
+func serviceOf(creds *credentials, words []string, usage string) (tokenService, error) {
 	if len(words) == 0 {
-		var choices []tui.Choice
-		for _, env := range cfg.Envs {
-			if env.Local() && env.Archived == "" {
-				choices = append(choices, tui.Choice{Name: env.Name})
+		switch len(creds.Tokens) {
+		case 0:
+			return tokenService{}, fmt.Errorf("%q has no tokens (bh token set %s <service>)", creds.env.Name, creds.env.Name)
+		case 1:
+			words = []string{creds.Tokens[0].Service}
+		default:
+			names := make([]string, len(creds.Tokens))
+			for i, token := range creds.Tokens {
+				names[i] = token.Service
 			}
+			return tokenService{}, usagef("usage: bh %s\n(%q has tokens of %s: say which)", usage, creds.env.Name, strings.Join(names, " and "))
 		}
-		name, err := a.choose(ctx, usage, "the environment", "Which environment?", choices)
-		if err != nil {
-			return store, config.Environment{}, nil, err
-		}
-		words = []string{name}
 	}
-	env, err := holderOf(store, words[0])
-	return store, env, words[1:], err
+	service, known := serviceNamed(words[0])
+	if !known {
+		return tokenService{}, usagef("%q is not a service bh gets tokens from (%s)", words[0], serviceNames())
+	}
+	return service, nil
 }
 
 func (a *app) tokenSetCommand(ctx context.Context, args []string, refresh bool) error {
-	command, usage := "token set", "token set [<env>] [<service>] [<preset>] [--owner <user|org>] [--days <n>] [--no-open]"
+	command, usage := "token set", "token set <env> <service> [<preset>] [--owner <user|org>] [--days <n>] [--no-open]"
 	if refresh {
-		command, usage = "token refresh", "token refresh [<env>] [<service>] [--no-open]"
+		command, usage = "token refresh", "token refresh <env> [<service>] [--no-open]"
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	owner := flags.String("owner", "", "")
@@ -639,12 +624,11 @@ func (a *app) tokenSetCommand(ctx context.Context, args []string, refresh bool) 
 	if err != nil {
 		return err
 	}
-	limit := 3
-	if refresh {
-		limit = 2
-	}
-	if len(words) > limit || (refresh && (*owner != "" || *days != "")) {
+	switch {
+	case refresh && (len(words) < 1 || len(words) > 2 || *owner != "" || *days != ""):
 		return usagef("usage: bh %s", usage)
+	case !refresh && (len(words) < 2 || len(words) > 3):
+		return usagef("usage: bh %s\n(services: %s)", usage, serviceNames())
 	}
 	request := githubRequest{Owner: *owner}
 	if *days != "" {
@@ -657,49 +641,22 @@ func (a *app) tokenSetCommand(ctx context.Context, args []string, refresh bool) 
 		}
 	}
 
-	store, env, words, err := a.tokenEnvironment(ctx, usage, words, "")
+	store, err := a.store()
 	if err != nil {
 		return err
 	}
-	if env.Archived != "" {
-		return archivedError(env)
+	env, err := handedTo(store, words[0])
+	if err != nil {
+		return err
 	}
 	creds, err := a.credentialsOf(store, env, false)
 	if err != nil {
 		return err
 	}
-
-	// The service.
-	var service tokenService
-	if len(words) == 0 {
-		var choices []tui.Choice
-		for _, candidate := range tokenServices {
-			has := creds.token(candidate.Name) != nil
-			switch {
-			case refresh && !has:
-				continue
-			case has:
-				choices = append(choices, tui.Choice{Name: candidate.Name, Note: candidate.Title + " — " + tokenSummary(*creds.token(candidate.Name), a.now())})
-			default:
-				choices = append(choices, tui.Choice{Name: candidate.Name, Note: candidate.Title})
-			}
-		}
-		if refresh && len(choices) == 0 {
-			return fmt.Errorf("%q has no tokens to refresh (bh token set %s)", env.Name, env.Name)
-		}
-		picked := ""
-		if refresh && len(choices) == 1 {
-			picked = choices[0].Name // the only one it has
-		} else if picked, err = a.choose(ctx, usage, "the service", "Which service?", choices); err != nil {
-			return err
-		}
-		words = []string{picked}
+	service, err := serviceOf(creds, words[1:min(2, len(words))], usage)
+	if err != nil {
+		return err
 	}
-	service, known := serviceNamed(words[0])
-	if !known {
-		return usagef("%q is not a service bh gets tokens from (%s)", words[0], serviceNames())
-	}
-	words = words[1:]
 	previous := creds.token(service.Name)
 
 	var issue tokenIssue
@@ -713,31 +670,19 @@ func (a *app) tokenSetCommand(ctx context.Context, args []string, refresh bool) 
 		// What bh asked for stays as it was.
 		request.Preset, request.Owner = previous.Preset, previous.Owner
 	} else {
-		// The preset, for a service that has them.
-		asked := false
+		// The preset, for a service that has them. There is no default:
+		// it decides what code in the environment can do outside it.
 		switch {
-		case len(service.Presets) == 0 && len(words) > 0:
+		case len(service.Presets) == 0 && len(words) == 3:
 			return usagef("%s has no presets: the token's type is chosen on its page (bh token set %s %s)", service.Name, env.Name, service.Name)
-		case len(service.Presets) == 0:
-		case len(words) == 0:
-			var choices []tui.Choice
+		case len(service.Presets) > 0 && len(words) < 3:
+			var lines []string
 			for _, preset := range service.Presets {
-				choices = append(choices, tui.Choice{Name: preset.Name, Note: preset.About})
+				lines = append(lines, fmt.Sprintf("  %-11s %s", preset.Name, preset.About))
 			}
-			if request.Preset, err = a.choose(ctx, usage, "the preset ("+strings.Join(service.presetNames(), " | ")+")",
-				"What may code in "+env.Name+" do on "+service.Title+"?", choices); err != nil {
-				return err
-			}
-			asked = true
-		default:
-			request.Preset = words[0]
-		}
-		// The owner is asked for only in a conversation that is already
-		// going on; given as arguments, the command is taken at its word.
-		if asked && service.Name == config.ServiceGitHub && *owner == "" {
-			fmt.Fprint(a.stderr, "Owner of the repositories — a user or an organization (Enter for your own account): ")
-			line, _ := readLine(a.stdin)
-			request.Owner = strings.TrimSpace(line)
+			return usagef("usage: bh token set %s %s <preset>\n%s", env.Name, service.Name, strings.Join(lines, "\n"))
+		case len(words) == 3:
+			request.Preset = words[2]
 		}
 		if issue, err = a.issueFor(service, env.Name, request); err != nil {
 			return err
@@ -786,17 +731,21 @@ func (a *app) tokenSetCommand(ctx context.Context, args []string, refresh bool) 
 }
 
 func (a *app) tokenRemoveCommand(ctx context.Context, args []string) error {
-	const usage = "token remove [<env>] [<service>] [--yes]"
+	const usage = "token remove <env> [<service>] [--yes]"
 	flags := flag.NewFlagSet("token remove", flag.ContinueOnError)
 	yes := flags.Bool("yes", false, "")
 	words, err := parseFlags(flags, args)
 	if err != nil {
 		return err
 	}
-	if len(words) > 2 {
+	if len(words) < 1 || len(words) > 2 {
 		return usagef("usage: bh %s", usage)
 	}
-	store, env, words, err := a.tokenEnvironment(ctx, usage, words, "")
+	store, err := a.store()
+	if err != nil {
+		return err
+	}
+	env, err := holderOf(store, words[0])
 	if err != nil {
 		return err
 	}
@@ -804,25 +753,9 @@ func (a *app) tokenRemoveCommand(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(creds.Tokens) == 0 {
-		return fmt.Errorf("%q has no tokens", env.Name)
-	}
-	if len(words) == 0 {
-		picked := creds.Tokens[0].Service
-		if len(creds.Tokens) > 1 {
-			var choices []tui.Choice
-			for _, token := range creds.Tokens {
-				choices = append(choices, tui.Choice{Name: token.Service, Note: tokenSummary(token, a.now())})
-			}
-			if picked, err = a.choose(ctx, usage, "the service", "Which token?", choices); err != nil {
-				return err
-			}
-		}
-		words = []string{picked}
-	}
-	service, known := serviceNamed(words[0])
-	if !known {
-		return usagef("%q is not a service bh gets tokens from (%s)", words[0], serviceNames())
+	service, err := serviceOf(creds, words[1:], usage)
+	if err != nil {
+		return err
 	}
 	token := creds.token(service.Name)
 	if token == nil {
