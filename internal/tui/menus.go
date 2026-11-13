@@ -169,7 +169,9 @@ func (m *Model) settingsMenu(id, name string) *menu {
 		return []item{
 			{label: "Runtime", run: func(m *Model) tea.Cmd { m.push(m.runtimeForm(id)); return nil }},
 			{label: "SSH", run: func(m *Model) tea.Cmd { m.push(m.sshMenu(id)); return nil }},
-			// Tokens need no restart: they take effect in new shells at once.
+			// What is handed in needs no restart: new shells see it at once.
+			{label: "Variables", run: func(m *Model) tea.Cmd { m.push(m.variablesMenu(id)); return nil }},
+			{label: "Secrets", run: func(m *Model) tea.Cmd { m.push(m.secretsMenu(id)); return nil }},
 			{label: "Tokens", run: func(m *Model) tea.Cmd { m.push(m.tokensMenu(id)); return nil }},
 		}
 	}}

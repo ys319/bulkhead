@@ -298,7 +298,7 @@ func devSource(store config.Store, id, base string) image.Source {
 // part of the user's build context. The token files among them hold secrets.
 func keptOutOfBuilds(name string) bool {
 	switch name {
-	case "env.json", "github.json", "tokens.json", "github.clear-pending":
+	case "env.json", "tokens.json", "secrets.json", "values.json", "github.json", config.PendingGitHub, config.PendingEnv:
 		return true
 	}
 	return strings.HasSuffix(name, ".tmp") || strings.HasPrefix(name, ".")
@@ -426,8 +426,12 @@ func (a *app) start(ctx context.Context, command, ref string, rebuild *image.Opt
 	// The tokens recorded on this machine go into their volumes before the
 	// environment starts: that is what applies a token set, or takes out
 	// one removed, while Docker could not be reached.
+	creds, err := a.credentialsOf(store, env, false)
+	if err != nil {
+		return err
+	}
 	writer := volumeWriter{eng: eng, owner: target.Owner, image: target.HolderImage, id: env.ID}
-	if err := writer.sync(ctx, store); err != nil {
+	if err := writer.sync(ctx, creds); err != nil {
 		return err
 	}
 	if err := run(ops.Runner{Engine: eng}, ctx, planned, target); err != nil {
@@ -560,8 +564,13 @@ func (a *app) destroy(ctx context.Context, args []string) error {
 		if !local {
 			what = "its settings (nothing on the remote machine is touched)"
 		}
-		if state, err := store.LoadGitHub(id); local && err == nil && state != nil {
-			what += fmt.Sprintf(".\nIts GitHub token (%s) is revoked on GitHub", state.TokenName)
+		// The records only: no value is read for a question.
+		if tokens, err := store.LoadTokens(id); local && err == nil && len(tokens) > 0 {
+			services := make([]string, len(tokens))
+			for i, token := range tokens {
+				services[i] = token.Service
+			}
+			what += fmt.Sprintf(".\nIts tokens (%s) are revoked at their services", strings.Join(services, ", "))
 		}
 		fmt.Fprintf(a.stderr, "This removes %q: %s.\nType the name to confirm: ", name, what)
 		answer, _ := bufio.NewReader(a.stdin).ReadString('\n')
@@ -584,7 +593,7 @@ func (a *app) destroy(ctx context.Context, args []string) error {
 		// The tokens come after Docker's part — if that fails the
 		// environment stays, and its token has to keep working — and before
 		// the records go: revoking the GitHub token takes the copy in them.
-		warnings = a.tokenLeftovers(ctx, store, id)
+		warnings = a.credentialLeftovers(ctx, store, id, name)
 	}
 	if err := store.RemoveEnvironment(id); err != nil {
 		return err

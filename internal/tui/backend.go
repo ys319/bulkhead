@@ -30,17 +30,40 @@ type EnvState struct {
 	Known  bool
 	// Findings are what bh doctor finds about the environment now.
 	Findings []doctor.Finding
-	// Tokens are the credentials handed to the environment, without their
-	// values. TokenProblem says why their records could not be read.
+	// Tokens are the credentials services issued for the environment and
+	// Secrets the names of its secrets, both without values. TokenProblem
+	// says why their records could not be read.
 	Tokens       []Token
+	Secrets      []string
 	TokenProblem string
 }
 
 // Token is a credential handed to an environment.
 type Token struct {
-	Kind    string // "github", "hf" or "custom"
-	Name    string // the variable it is exported as
-	Summary string // GitHub's token in a line; empty for the others
+	Service string // "github", "huggingface"
+	Summary string // the token in a line: access, owner, expiry
+	// Urgency is "expired", "soon" or "".
+	Urgency string
+}
+
+// TokenService is a service a token can be had from.
+type TokenService struct {
+	Name  string // what the backend takes
+	Title string // what it is called on screen
+	// Presets are what a token may be asked for, each including the one
+	// before; none for a service whose page asks for itself.
+	Presets []TokenPreset
+}
+
+// TokenPreset is one of them.
+type TokenPreset struct{ Name, About string }
+
+// TokenIssue is where a token is made and what to do there.
+type TokenIssue struct {
+	Address string
+	Steps   []string
+	// TokenName is the name the token gets on the page, where bh decides it.
+	TokenName string
 }
 
 // Snapshot is everything the list shows, read at one moment.
@@ -95,18 +118,22 @@ type Backend interface {
 	CDIDevices(ctx context.Context) (devices []string, known bool, err error)
 	Addresses() []Address
 
-	// Tokens. Each returns what to tell the user when it worked; the
-	// values never come back.
-	SetToken(ctx context.Context, name, kind, tokenName, value string) (string, error)
-	RemoveToken(ctx context.Context, name, tokenName string) (string, error)
-	// TokenPage is where a token of the kind is issued; empty when there
-	// is no such page.
-	TokenPage(kind string) string
-	// GitHubIssue prepares issuing a GitHub token: the page that has the
-	// form filled in, and the name the token gets.
-	GitHubIssue(name, preset string) (address, tokenName string, err error)
-	SetGitHub(ctx context.Context, name, token, preset, tokenName string) (string, error)
-	RevokeGitHub(ctx context.Context, name string) (string, error)
+	// What the environment is handed: variables, secrets, tokens. Each
+	// returns what to tell the user when it worked; the values of secrets
+	// and tokens never come back.
+	SetVar(ctx context.Context, name, key, value string) (string, error)
+	UnsetVar(ctx context.Context, name, key string) (string, error)
+	SetSecret(ctx context.Context, name, key, value string) (string, error)
+	RemoveSecret(ctx context.Context, name, key string) (string, error)
+	TokenServices() []TokenService
+	// TokenIssue prepares getting a token from the service: with refresh,
+	// the one the environment has, regenerated on the service's page.
+	TokenIssue(name, service, preset string, refresh bool) (TokenIssue, error)
+	// SetToken checks the pasted value with the service and hands the
+	// token to the environment.
+	SetToken(ctx context.Context, name, service, preset, value, tokenName string, refresh bool) (string, error)
+	// RemoveToken revokes the token and takes it out.
+	RemoveToken(ctx context.Context, name, service string) (string, error)
 	OpenURL(address string) error
 
 	// Snapshots: the data of a stopped environment in one file. Snapshot

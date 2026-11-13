@@ -286,7 +286,7 @@ func (m *Model) localDetail(state EnvState, inner, rows int) []string {
 		keys += " + " + strconv.Itoa(extra)
 	}
 	lines = append(lines, field(inner, "  keys", keys)...)
-	lines = append(lines, tokenLines(state, inner)...)
+	lines = append(lines, handedLines(state, inner)...)
 
 	// The end of the environment's output, as far as there is room.
 	if m.logs != nil && m.logs.id == env.ID {

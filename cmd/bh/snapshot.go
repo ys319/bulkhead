@@ -638,8 +638,8 @@ func (a *app) importCommand(ctx context.Context, args []string) error {
 type archived struct {
 	Env   config.Environment
 	Taken snapshotTaken
-	// TokenRevoked: it had a GitHub token, which is revoked now.
-	TokenRevoked bool
+	// Revoked are the services whose tokens it had, which are revoked now.
+	Revoked []string
 	// Warnings are what is left to do by hand.
 	Warnings []string
 }
@@ -685,10 +685,14 @@ func (a *app) archiveEnv(ctx context.Context, ref string) (archived, error) {
 		return result, fmt.Errorf("the snapshot is taken and %q is marked archived, but removing its containers and volumes failed: %w\n(bh unarchive %s puts it back as it was)", env.Name, err, env.Name)
 	}
 	// After Docker's part, as with destroy: had that failed, the
-	// environment would still be there to use, and its token with it.
-	var warning string
-	if result.TokenRevoked, warning = a.revokeForArchive(ctx, store, env); warning != "" {
-		result.Warnings = append(result.Warnings, warning)
+	// environment would still be there to use, and its tokens with it. An
+	// environment that is asleep should not hold a credential that works.
+	// A token that cannot be revoked keeps its record: it is what a retry
+	// needs. Secrets and variables stay; they come back with bh unarchive.
+	if creds, err := a.credentialsOf(store, env, false); err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("the token records could not be read, so no token was revoked: %v", err))
+	} else {
+		result.Revoked, result.Warnings = a.revokeTokens(ctx, creds, true)
 	}
 	a.syncSSH(store)
 	return result, nil
@@ -707,8 +711,8 @@ func (a *app) archive(ctx context.Context, args []string) error {
 	if !*yes {
 		fmt.Fprintf(a.stderr, "This takes a snapshot of %q and then removes its containers and volumes.\n", words[0])
 		fmt.Fprintln(a.stderr, "The workspace and the home directory come back with bh unarchive; the nix store")
-		fmt.Fprintln(a.stderr, "and caches do not — init.sh installs the tools again. A GitHub token of the")
-		fmt.Fprintln(a.stderr, "environment is revoked.")
+		fmt.Fprintln(a.stderr, "and caches do not — init.sh installs the tools again. The tokens of the")
+		fmt.Fprintln(a.stderr, "environment (GitHub, Hugging Face) are revoked.")
 		if !a.confirm("Archive?") {
 			return errAborted
 		}
@@ -719,8 +723,8 @@ func (a *app) archive(ctx context.Context, args []string) error {
 	}
 	name := result.Env.Name
 	fmt.Fprintf(a.stdout, "Archived %q in %s (%s). bh unarchive %s brings it back.\n", name, result.Taken.Path, tui.HumanBytes(result.Taken.Size), name)
-	if result.TokenRevoked {
-		fmt.Fprintf(a.stdout, "Its GitHub token is revoked (bh github set %s after bh unarchive gives it a new one).\n", name)
+	if len(result.Revoked) > 0 {
+		fmt.Fprintf(a.stdout, "Revoked its tokens: %s (bh token set %s after bh unarchive gets new ones).\n", strings.Join(result.Revoked, ", "), name)
 	}
 	a.warn(result.Warnings)
 	return nil

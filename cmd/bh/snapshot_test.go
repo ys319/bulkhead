@@ -485,28 +485,38 @@ func TestDoctorOnAnArchivedEnvironment(t *testing.T) {
 }
 
 // An environment that is asleep should not hold a credential that works.
-func TestArchiveRevokesTheGitHubToken(t *testing.T) {
+func TestArchiveRevokesTheTokens(t *testing.T) {
 	b := newBench(t)
 	id := withData(t, b, "web")
 	b.seedGitHub("web", patNew)
+	b.seedHuggingFace("web", hfToken)
+	b.stdin = "s3cret value"
+	b.ok("secret", "set", "web", "API_KEY")
 	b.web.Revocable()
 
 	out := b.ok("archive", "web", "--yes")
-	if !strings.Contains(out, "Its GitHub token is revoked") {
+	if !strings.Contains(out, "Revoked its tokens: GitHub, Hugging Face") {
 		t.Errorf("output:\n%s", out)
 	}
 	if got := len(b.web.To("/credentials/revoke")); got != 1 {
-		t.Errorf("%d revocations", got)
+		t.Errorf("%d revocations at GitHub", got)
 	}
-	if b.githubState("web") != nil {
-		t.Error("the record of the revoked token stayed")
+	if got := len(b.web.To("/api/credentials/revoke")); got != 1 {
+		t.Errorf("%d revocations at Hugging Face", got)
+	}
+	if len(b.tokens("web")) != 0 || b.kept(id, "token/github") != "" || b.kept(id, "token/huggingface") != "" {
+		t.Errorf("revoked tokens stayed: %+v", b.tokens("web"))
+	}
+	// A secret is the user's: it sleeps with the environment.
+	if b.kept(id, "secret/API_KEY") != "s3cret value" {
+		t.Error("the secret's value went")
 	}
 
-	// While archived, tokens are not handed out: there is no volume to put
-	// them into, and none may be made for it.
+	// While archived, nothing is handed out: there is no volume to put it
+	// into, and none may be made for it.
 	volumes := maps.Clone(b.engine.Volumes)
 	b.stdin = "value"
-	for _, command := range [][]string{{"token", "set", "web", "custom", "API_KEY"}, {"token", "remove", "web", "API_KEY"}} {
+	for _, command := range [][]string{{"secret", "set", "web", "OTHER"}, {"secret", "remove", "web", "API_KEY"}, {"token", "set", "web", "huggingface", "--no-open"}} {
 		if err := b.fails(1, command...); !strings.Contains(err, "archived") {
 			t.Errorf("bh %s: %s", strings.Join(command, " "), err)
 		}
@@ -515,37 +525,39 @@ func TestArchiveRevokesTheGitHubToken(t *testing.T) {
 		t.Errorf("volumes changed: %v", b.engine.Volumes)
 	}
 
-	// Back, it starts without a token.
+	// Back, it starts without tokens and with its secret.
 	b.ok("unarchive", "web")
 	b.ok("up", "web")
-	if status := b.ok("github", "status", "web"); strings.Contains(status, "github_pat") {
-		t.Errorf("status:\n%s", status)
+	if list := b.ok("token", "list", "web"); !strings.Contains(list, "has no tokens") {
+		t.Errorf("tokens:\n%s", list)
 	}
-	_ = id
+	if run := b.lastEnvWrite(); !strings.Contains(run, "API_KEY=s3cret value\n") {
+		t.Errorf("what the environment got at the start: %q", run)
+	}
 }
 
-func TestArchiveGoesOnWhenTheTokenCannotBeRevoked(t *testing.T) {
+func TestArchiveGoesOnWhenATokenCannotBeRevoked(t *testing.T) {
 	b := newBench(t)
-	withData(t, b, "web")
+	id := withData(t, b, "web")
 	b.seedGitHub("web", patNew)
 	b.web.Reply("/credentials/revoke", http.StatusInternalServerError, "")
 
 	code, out, stderr := b.run("archive", "web", "--yes")
-	if code != 0 || !strings.Contains(out, `Archived "web"`) || strings.Contains(out, "is revoked") ||
-		!strings.Contains(stderr, "bh: warning: revoking the GitHub token failed (HTTP 500) — it still works; bh github revoke web retries") {
+	if code != 0 || !strings.Contains(out, `Archived "web"`) || strings.Contains(out, "Revoked its tokens") ||
+		!strings.Contains(stderr, "bh: warning: revoking the GitHub token failed (HTTP 500) — it still works; bh token remove web github retries") {
 		t.Fatalf("exit %d\n%s%s", code, out, stderr)
 	}
 	if b.env("web").Archived == "" {
 		t.Error("not archived")
 	}
 	// The copy is what the retry needs — and the retry makes no volume.
-	if b.githubState("web") == nil {
-		t.Fatal("the record went though the token still works")
+	if b.githubState("web") == nil || b.kept(id, "token/github") != patNew {
+		t.Fatal("the record or the value went though the token still works")
 	}
 	volumes := maps.Clone(b.engine.Volumes)
 	b.web.Revocable()
-	b.ok("github", "revoke", "web", "--yes")
-	if b.githubState("web") != nil || !maps.Equal(volumes, b.engine.Volumes) {
+	b.ok("token", "remove", "web", "github", "--yes")
+	if b.githubState("web") != nil || b.kept(id, "token/github") != "" || !maps.Equal(volumes, b.engine.Volumes) {
 		t.Errorf("after the retry: record %v, volumes %v", b.githubState("web"), b.engine.Volumes)
 	}
 }

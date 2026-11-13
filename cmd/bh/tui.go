@@ -85,14 +85,19 @@ func (b backend) Load(ctx context.Context) (tui.Snapshot, error) {
 					state.Findings = checkEnvironment(ctx, eng, store, env, keys, nil)
 				}
 			}
-			_, entries, problems, err := b.a.listTokens(env.Name)
-			if err != nil {
-				problems = append(problems, err.Error())
+			// Records only: the values stay where they are kept.
+			if creds, err := b.a.credentialsOf(store, env, false); err != nil {
+				state.TokenProblem = err.Error()
+			} else {
+				for _, token := range creds.Tokens {
+					state.Tokens = append(state.Tokens, tui.Token{
+						Service: token.Service, Summary: tokenSummary(token, b.a.now()), Urgency: token.Urgency(b.a.now()),
+					})
+				}
+				for _, secret := range creds.Secrets {
+					state.Secrets = append(state.Secrets, secret.Name)
+				}
 			}
-			for _, entry := range entries {
-				state.Tokens = append(state.Tokens, tui.Token{Kind: entry.Kind, Name: entry.Name, Summary: entry.Summary})
-			}
-			state.TokenProblem = strings.Join(problems, "; ")
 		}
 		snap.Envs = append(snap.Envs, state)
 	}
@@ -504,56 +509,135 @@ func said(first string, notes, warnings []string) string {
 	return strings.Join(append(append([]string{first}, notes...), warnings...), "\n")
 }
 
-func (b backend) SetToken(ctx context.Context, name, kind, tokenName, value string) (string, error) {
-	result, err := b.quiet(io.Discard).setToken(ctx, name, kind, tokenName, value)
+func (b backend) SetVar(ctx context.Context, name, key, value string) (string, error) {
+	result, err := b.quiet(io.Discard).changeVar(ctx, name, key, value, false)
+	if err != nil {
+		return "", err
+	}
+	return handedIn("set "+key, result.Env, result.SyncErr), nil
+}
+
+func (b backend) UnsetVar(ctx context.Context, name, key string) (string, error) {
+	result, err := b.quiet(io.Discard).changeVar(ctx, name, key, "", true)
+	if err != nil {
+		return "", err
+	}
+	return handedIn("took "+key+" out", result.Env, result.SyncErr), nil
+}
+
+func (b backend) SetSecret(ctx context.Context, name, key, value string) (string, error) {
+	result, err := b.quiet(io.Discard).setSecret(ctx, name, key, value)
+	if err != nil {
+		return "", err
+	}
+	return handedIn("set the secret "+key, result.Env, result.SyncErr), nil
+}
+
+func (b backend) RemoveSecret(ctx context.Context, name, key string) (string, error) {
+	result, err := b.quiet(io.Discard).removeSecret(ctx, name, key)
+	if err != nil {
+		return "", err
+	}
+	return handedIn("took the secret "+key+" out", result.Env, result.SyncErr), nil
+}
+
+// handedIn words a change of what an environment is handed.
+func handedIn(done string, env config.Environment, syncErr error) string {
+	if syncErr != nil {
+		return done + "\n" + notYet(env, syncErr)
+	}
+	return done + " — " + newShells
+}
+
+func (b backend) TokenServices() []tui.TokenService {
+	services := make([]tui.TokenService, len(tokenServices))
+	for i, service := range tokenServices {
+		services[i] = tui.TokenService{Name: service.Name, Title: service.Title}
+		for _, preset := range service.Presets {
+			services[i].Presets = append(services[i].Presets, tui.TokenPreset{Name: preset.Name, About: preset.About})
+		}
+	}
+	return services
+}
+
+func (b backend) TokenIssue(name, serviceName, preset string, refresh bool) (tui.TokenIssue, error) {
+	service, known := serviceNamed(serviceName)
+	if !known {
+		return tui.TokenIssue{}, fmt.Errorf("%q is not a service bh gets tokens from", serviceName)
+	}
+	var issue tokenIssue
+	if refresh {
+		store, err := b.a.store()
+		if err != nil {
+			return tui.TokenIssue{}, err
+		}
+		env, err := handedTo(store, name)
+		if err != nil {
+			return tui.TokenIssue{}, err
+		}
+		creds, err := b.a.credentialsOf(store, env, false)
+		if err != nil {
+			return tui.TokenIssue{}, err
+		}
+		token := creds.token(service.Name)
+		if token == nil {
+			return tui.TokenIssue{}, fmt.Errorf("%q has no %s token to refresh", name, service.Title)
+		}
+		issue = reissueFor(service, *token)
+	} else {
+		var err error
+		if issue, err = b.a.issueFor(service, name, githubRequest{Preset: preset}); err != nil {
+			return tui.TokenIssue{}, err
+		}
+	}
+	return tui.TokenIssue{Address: issue.URL, Steps: issue.Steps, TokenName: issue.TokenName}, nil
+}
+
+func (b backend) SetToken(ctx context.Context, name, serviceName, preset, value, tokenName string, refresh bool) (string, error) {
+	service, known := serviceNamed(serviceName)
+	if !known {
+		return "", fmt.Errorf("%q is not a service bh gets tokens from", serviceName)
+	}
+	a := b.quiet(io.Discard)
+	request := githubRequest{Preset: preset}
+	if refresh {
+		// What bh asked for stays as recorded.
+		store, err := a.store()
+		if err != nil {
+			return "", err
+		}
+		env, err := handedTo(store, name)
+		if err != nil {
+			return "", err
+		}
+		creds, err := a.credentialsOf(store, env, false)
+		if err != nil {
+			return "", err
+		}
+		if token := creds.token(service.Name); token != nil {
+			request.Preset, request.Owner, tokenName = token.Preset, token.Owner, token.TokenName
+		}
+	}
+	result, err := a.setToken(ctx, name, service, value, request, tokenName, refresh)
 	if err != nil {
 		return "", err
 	}
 	notes, warnings := result.report()
-	return said("saved "+result.Entry.Name, notes, warnings), nil
+	return said(service.Title+" token: "+tokenSummary(result.Token, b.a.now()), notes, warnings), nil
 }
 
-func (b backend) RemoveToken(ctx context.Context, name, tokenName string) (string, error) {
-	result, err := b.quiet(io.Discard).removeToken(ctx, name, tokenName)
+func (b backend) RemoveToken(ctx context.Context, name, serviceName string) (string, error) {
+	service, known := serviceNamed(serviceName)
+	if !known {
+		return "", fmt.Errorf("%q is not a service bh gets tokens from", serviceName)
+	}
+	result, err := b.quiet(io.Discard).removeToken(ctx, name, service)
 	if err != nil {
 		return "", err
 	}
-	text := "removed " + result.Entry.Name + " — it is still valid at its service; revoke it there if it may have leaked"
+	text := "revoked the " + service.Title + " token and took it out"
 	if result.SyncErr != nil {
-		text += fmt.Sprintf("\nit is still in the environment (%s) — bh up %s takes it out", oneLine(result.SyncErr), result.Env.Name)
-	}
-	return text, nil
-}
-
-func (b backend) TokenPage(kind string) string {
-	if kind == config.TokenKindHF {
-		return hfTokenURL
-	}
-	return ""
-}
-
-func (b backend) GitHubIssue(name, preset string) (address, tokenName string, err error) {
-	issue, err := b.a.prepareGitHubIssue(name, githubRequest{Preset: preset})
-	return issue.URL, issue.TokenName, err
-}
-
-func (b backend) SetGitHub(ctx context.Context, name, token, preset, tokenName string) (string, error) {
-	result, err := b.quiet(io.Discard).setGitHubToken(ctx, name, token, githubRequest{Preset: preset}, tokenName)
-	if err != nil {
-		return "", err
-	}
-	notes, warnings := result.report()
-	return said("GitHub token set: "+githubSummary(result.State, b.a.now()), notes, warnings), nil
-}
-
-func (b backend) RevokeGitHub(ctx context.Context, name string) (string, error) {
-	result, err := b.quiet(io.Discard).revokeGitHubToken(ctx, name)
-	if err != nil {
-		return "", err
-	}
-	text := "revoked the GitHub token (" + result.State.TokenName + ")"
-	if result.ClearErr != nil {
-		text += fmt.Sprintf("\nit is still in the environment (%s) — bh up %s takes it out; it no longer works", oneLine(result.ClearErr), result.Env.Name)
+		text += fmt.Sprintf("\nit is still in the environment (%s) — bh up %s takes it out; it no longer works", oneLine(result.SyncErr), result.Env.Name)
 	}
 	return text, nil
 }
@@ -609,8 +693,8 @@ func (b backend) Archive(ctx context.Context, name string, progress io.Writer) (
 		return "", err
 	}
 	text := fmt.Sprintf("%q is archived", name)
-	if result.TokenRevoked {
-		text += " and its GitHub token revoked"
+	if len(result.Revoked) > 0 {
+		text += " and its tokens revoked (" + strings.Join(result.Revoked, ", ") + ")"
 	}
 	if len(result.Warnings) > 0 {
 		text += " — but: " + strings.Join(result.Warnings, "; ")

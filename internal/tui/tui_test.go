@@ -216,45 +216,76 @@ func (f *fake) Watch(ctx context.Context) <-chan bool {
 	go func() { <-ctx.Done(); close(changes) }()
 	return changes
 }
-func (f *fake) SetToken(_ context.Context, name, kind, tokenName, value string) (string, error) {
-	if err := f.call("set-token %s %s %s len=%d", name, kind, tokenName, len(value)); err != nil {
+func (f *fake) SetVar(_ context.Context, name, key, value string) (string, error) {
+	if err := f.call("set-var %s %s=%s", name, key, value); err != nil {
 		return "", err
 	}
 	state := f.find(name)
-	state.Tokens = append(state.Tokens, Token{Kind: kind, Name: tokenName})
-	return "saved " + tokenName, nil
+	if state.Env.Vars == nil {
+		state.Env.Vars = map[string]string{}
+	}
+	state.Env.Vars[key] = value
+	return "set " + key, nil
 }
-func (f *fake) RemoveToken(_ context.Context, name, tokenName string) (string, error) {
-	if err := f.call("remove-token %s %s", name, tokenName); err != nil {
+func (f *fake) UnsetVar(_ context.Context, name, key string) (string, error) {
+	if err := f.call("unset-var %s %s", name, key); err != nil {
+		return "", err
+	}
+	delete(f.find(name).Env.Vars, key)
+	return "took " + key + " out", nil
+}
+func (f *fake) SetSecret(_ context.Context, name, key, value string) (string, error) {
+	if err := f.call("set-secret %s %s len=%d", name, key, len(value)); err != nil {
 		return "", err
 	}
 	state := f.find(name)
-	state.Tokens = slices.DeleteFunc(state.Tokens, func(token Token) bool { return token.Name == tokenName })
-	return "removed " + tokenName, nil
-}
-func (f *fake) TokenPage(kind string) string {
-	if kind == config.TokenKindHF {
-		return "https://hf.test/tokens"
+	if !slices.Contains(state.Secrets, key) {
+		state.Secrets = append(state.Secrets, key)
 	}
-	return ""
+	return "set the secret " + key, nil
 }
-func (f *fake) GitHubIssue(name, preset string) (string, string, error) {
-	return "https://github.test/new?preset=" + preset, "bulkhead-" + name, f.call("github-issue %s %s", name, preset)
-}
-func (f *fake) SetGitHub(_ context.Context, name, token, preset, tokenName string) (string, error) {
-	if err := f.call("set-github %s %s %s", name, preset, tokenName); err != nil {
+func (f *fake) RemoveSecret(_ context.Context, name, key string) (string, error) {
+	if err := f.call("remove-secret %s %s", name, key); err != nil {
 		return "", err
 	}
 	state := f.find(name)
-	state.Tokens = append([]Token{{Kind: "github", Name: "GH_TOKEN", Summary: preset + " · octocat · 2 repos · expires in 30d"}}, state.Tokens...)
-	return "GitHub token set", nil
+	state.Secrets = slices.DeleteFunc(state.Secrets, func(secret string) bool { return secret == key })
+	return "took the secret " + key + " out", nil
 }
-func (f *fake) RevokeGitHub(_ context.Context, name string) (string, error) {
-	if err := f.call("revoke-github %s", name); err != nil {
+func (f *fake) TokenServices() []TokenService {
+	return []TokenService{
+		{Name: "github", Title: "GitHub", Presets: []TokenPreset{
+			{"read", "clone and fetch"}, {"push", "also push and read CI"}, {"contribute", "also pull requests"},
+		}},
+		{Name: "huggingface", Title: "Hugging Face"},
+	}
+}
+func (f *fake) TokenIssue(name, service, preset string, refresh bool) (TokenIssue, error) {
+	err := f.call("token-issue %s %s preset=%s refresh=%v", name, service, preset, refresh)
+	return TokenIssue{
+		Address: "https://" + service + ".test/tokens?preset=" + preset, TokenName: "bh-" + name,
+		Steps: []string{"Make the token on the page:"},
+	}, err
+}
+func (f *fake) SetToken(_ context.Context, name, service, preset, value, tokenName string, refresh bool) (string, error) {
+	if err := f.call("set-token %s %s preset=%s refresh=%v len=%d", name, service, preset, refresh, len(value)); err != nil {
 		return "", err
 	}
 	state := f.find(name)
-	state.Tokens = slices.DeleteFunc(state.Tokens, func(token Token) bool { return token.Kind == "github" })
+	summary := preset + " · octocat · expires in 30d"
+	if refresh {
+		summary = "refreshed · octocat · expires in 30d"
+	}
+	state.Tokens = append(slices.DeleteFunc(state.Tokens, func(token Token) bool { return token.Service == service }),
+		Token{Service: service, Summary: summary})
+	return service + " token set", nil
+}
+func (f *fake) RemoveToken(_ context.Context, name, service string) (string, error) {
+	if err := f.call("remove-token %s %s", name, service); err != nil {
+		return "", err
+	}
+	state := f.find(name)
+	state.Tokens = slices.DeleteFunc(state.Tokens, func(token Token) bool { return token.Service == service })
 	return "revoked", nil
 }
 func (f *fake) OpenURL(address string) error { return f.call("open-url %s", address) }
@@ -862,83 +893,137 @@ func TestHumanBytes(t *testing.T) {
 	}
 }
 
-func TestTokensMenu(t *testing.T) {
+// Three menus for the three things an environment is handed.
+func TestVariablesAndSecretsMenus(t *testing.T) {
 	s := start(t)
 	s.onto("web").press("enter").pick("Settings")
-	if got, want := s.labels(), []string{"Runtime", "SSH", "Tokens"}; !slices.Equal(got, want) {
+	if got, want := s.labels(), []string{"Runtime", "SSH", "Variables", "Secrets", "Tokens"}; !slices.Equal(got, want) {
 		t.Errorf("settings: %q", got)
 	}
-	s.pick("Tokens")
-	if got, want := s.labels(), []string{"GitHub", "+ Add Hugging Face token", "+ Add custom token"}; !slices.Equal(got, want) {
-		t.Errorf("tokens: %q", got)
-	}
 
-	// A custom token: its name is checked before the value is asked for,
-	// and the value never shows.
-	s.pick("+ Add custom token").press("PATH", "enter")
+	// A variable: its name is checked before the value is asked for, and
+	// the value shows — it is no secret.
+	s.pick("Variables")
+	if got, want := s.labels(), []string{"+ Add variable"}; !slices.Equal(got, want) {
+		t.Errorf("variables: %q", got)
+	}
+	s.pick("+ Add variable").press("PATH", "enter")
 	if _, still := s.top().(*input); !still {
 		t.Fatal("a reserved name was accepted")
 	}
-	s.top().(*input).value = []rune("OPENAI_API_KEY")
+	s.top().(*input).value = []rune("NODE_ENV")
+	s.press("enter", "development mode")
+	if text := s.text(); !strings.Contains(text, "development mode") {
+		t.Errorf("the value of a variable is hidden:\n%s", text)
+	}
 	s.press("enter")
+	s.called("set-var web NODE_ENV=development mode")
+	s.shows("variables: NODE_ENV")
+
+	s.press("enter").pick("Settings").pick("Variables")
+	if got, want := s.labels(), []string{"NODE_ENV", "+ Add variable"}; !slices.Equal(got, want) {
+		t.Errorf("variables afterwards: %q", got)
+	}
+	s.shows("development mode")
+	s.pick("NODE_ENV").pick("Remove")
+	s.called("unset-var web NODE_ENV")
+
+	// A secret: the value never shows.
+	s.press("esc", "esc").pick("Secrets").pick("+ Add secret").press("OPENAI_API_KEY", "enter")
 	s.Update(tea.PasteMsg{Content: "sk-secret-value\n"})
 	if text := s.text(); strings.Contains(text, "sk-secret") || !strings.Contains(text, "•••") {
 		t.Errorf("the value is on the screen:\n%s", text)
 	}
 	s.press("enter")
-	s.called("set-token web custom OPENAI_API_KEY len=15")
-	s.shows("custom: OPENAI_API_KEY")
+	s.called("set-secret web OPENAI_API_KEY len=15")
+	s.shows("secrets: OPENAI_API_KEY")
 
-	// Hugging Face: the page opens, and only one such token can be added.
-	s.press("enter").pick("Settings").pick("Tokens").pick("+ Add Hugging Face token")
-	s.called("open-url https://hf.test/tokens")
-	s.press("hf_abc", "enter")
-	s.called("set-token web hf HF_TOKEN len=6")
-	s.press("enter").pick("Settings").pick("Tokens")
-	if got, want := s.labels(), []string{"GitHub", "OPENAI_API_KEY", "HF_TOKEN", "+ Add custom token"}; !slices.Equal(got, want) {
-		t.Errorf("tokens afterwards: %q", got)
+	s.press("enter").pick("Settings").pick("Secrets").pick("OPENAI_API_KEY")
+	if got, want := s.labels(), []string{"Replace the value", "Remove"}; !slices.Equal(got, want) {
+		t.Errorf("a secret: %q", got)
 	}
-
-	s.pick("OPENAI_API_KEY").pick("Remove")
-	s.shows("it stays valid at its service")
+	s.pick("Remove")
+	s.shows("forget its value")
 	s.press("right", "enter")
-	s.called("remove-token web OPENAI_API_KEY")
+	s.called("remove-secret web OPENAI_API_KEY")
 }
 
-func TestGitHubTokenFlow(t *testing.T) {
+func TestTokensMenu(t *testing.T) {
 	s := start(t)
-	s.onto("web").press("enter").pick("Settings").pick("Tokens").pick("GitHub")
-	if got, want := s.labels(), []string{"Issue a token"}; !slices.Equal(got, want) {
+	s.onto("web").press("enter").pick("Settings").pick("Tokens")
+	if got, want := s.labels(), []string{"GitHub", "Hugging Face"}; !slices.Equal(got, want) {
+		t.Errorf("tokens: %q", got)
+	}
+	s.pick("GitHub")
+	if got, want := s.labels(), []string{"Get a token"}; !slices.Equal(got, want) {
 		t.Errorf("without a token: %q", got)
 	}
-	// No preset is preselected for good: the user has to pick one.
-	s.pick("Issue a token")
-	if got, want := s.labels(), []string{"read", "push", "push+pr"}; !slices.Equal(got, want) {
+	// No preset is preselected for good: the user has to pick one, and
+	// sees what each allows.
+	s.pick("Get a token")
+	if got, want := s.labels(), []string{"read", "push", "contribute"}; !slices.Equal(got, want) {
 		t.Errorf("presets: %q", got)
 	}
+	s.shows("also push and read CI")
 	s.pick("push")
-	s.called("github-issue web push")
-	s.called("open-url https://github.test/new?preset=push")
-	s.shows("token name: bulkhead-web")
+	s.called("token-issue web github preset=push refresh=false")
+	s.called("open-url https://github.test/tokens?preset=push")
+	s.shows("Make the token on the page:", "Then paste the token here:")
 
-	s.press("not-a-token", "enter")
-	s.shows("does not look like a fine-grained token")
-	s.top().(*input).value = []rune("github_pat_ABC123")
 	// ctrl+o opens the page again.
 	s.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 	if count := strings.Count(strings.Join(s.backend.calls, "\n"), "open-url"); count != 2 {
 		t.Errorf("the page was opened %d times", count)
 	}
 	s.press("enter")
-	s.called("set-github web push bulkhead-web")
-	s.shows("github: push · octocat · 2 repos · expires in 30d")
+	if _, still := s.top().(*input); !still {
+		t.Fatal("an empty paste was accepted")
+	}
+	s.Update(tea.PasteMsg{Content: "github_pat_ABC123\n"})
+	if text := s.text(); strings.Contains(text, "github_pat_ABC") {
+		t.Errorf("the token is on the screen:\n%s", text)
+	}
+	s.press("enter")
+	s.called("set-token web github preset=push refresh=false len=17")
+	s.shows("github: push · octocat · expires in 30d")
 
+	// With a token: the same again, another one, or none.
 	s.press("enter").pick("Settings").pick("Tokens").pick("GitHub")
-	if got := s.labels(); !slices.Equal(got[1:], []string{"---", "Replace", "Revoke"}) {
+	if got := s.labels(); !slices.Equal(got[1:], []string{"---", "Refresh", "Replace", "Remove"}) {
 		t.Errorf("with a token: %q", got)
 	}
-	s.pick("Revoke").press("right", "enter")
-	s.called("revoke-github web")
+	s.pick("Refresh")
+	s.called("token-issue web github preset= refresh=true")
+	s.press("github_pat_NEW", "enter")
+	s.called("set-token web github preset= refresh=true len=14")
+	s.shows("github: refreshed")
+
+	s.press("enter").pick("Settings").pick("Tokens").pick("GitHub").pick("Remove")
+	s.shows("Revoke the GitHub token")
+	s.press("right", "enter")
+	s.called("remove-token web github")
+
+	// A service without presets goes straight to its page.
+	s.press("enter").pick("Settings").pick("Tokens").pick("Hugging Face").pick("Get a token")
+	s.called("token-issue web huggingface preset= refresh=false")
+	if _, asking := s.top().(*input); !asking {
+		t.Fatalf("no dialog for the token: %T", s.top())
+	}
+	s.press("hf_abc", "enter")
+	s.called("set-token web huggingface preset= refresh=false len=6")
+}
+
+// A token that is about to expire, or has, stands out in the detail.
+func TestExpiringTokenIsColoured(t *testing.T) {
+	plain := handedLines(EnvState{Tokens: []Token{{Service: "github", Summary: "push · octo · expires in 20d"}}}, 60)
+	soon := handedLines(EnvState{Tokens: []Token{{Service: "github", Summary: "push · octo · expires in 3d", Urgency: "soon"}}}, 60)
+	gone := handedLines(EnvState{Tokens: []Token{{Service: "github", Summary: "push · octo · EXPIRED", Urgency: "expired"}}}, 60)
+	if strings.Contains(strings.Join(plain, ""), "\x1b[33m") || !strings.Contains(strings.Join(soon, ""), "\x1b[33m") || !strings.Contains(strings.Join(gone, ""), "\x1b[31m") {
+		t.Errorf("colours:\n%q\n%q\n%q", plain, soon, gone)
+	}
+	if lines := handedLines(EnvState{}, 60); lines != nil {
+		t.Errorf("nothing handed in: %q", lines)
+	}
 }
 
 func TestDoctorShowsInTheDetailAndInTheNameColor(t *testing.T) {

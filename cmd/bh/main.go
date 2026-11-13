@@ -19,6 +19,7 @@ import (
 	"github.com/ys319/bulkhead/internal/image"
 	"github.com/ys319/bulkhead/internal/ops"
 	"github.com/ys319/bulkhead/internal/tui"
+	"github.com/ys319/bulkhead/internal/vault"
 )
 
 // version is set at release time with -ldflags "-X main.version=...".
@@ -32,6 +33,7 @@ func main() {
 		getenv: os.Getenv, goos: runtime.GOOS,
 		dial: dialEngine, ssh: systemSSH, builder: engine.CLIBuilder{},
 		tool: runTool, lookPath: exec.LookPath, isTerminal: stdinIsTerminal, rawTerminal: rawTerminal, pick: tui.Pick, fullScreen: tui.Run,
+		osVault: func(prefix string) vault.Store { return vault.OS{Prefix: prefix} }, probeVault: vault.Probe,
 		httpClient: newHTTPClient(), openURL: openInBrowser, readSecret: readHiddenLine, now: time.Now,
 	}
 	os.Exit(a.run(ctx, os.Args[1:]))
@@ -84,6 +86,11 @@ type app struct {
 	rawTerminal func() (restore func(), size func() (height, width uint), err error)
 	// pick asks the user to choose from a list.
 	pick func(ctx context.Context, title string, choices []tui.Choice) (string, error)
+	// osVault is the credential store of the operating system, for the
+	// values filed under the prefix; probeVault reports whether it can be
+	// used on this machine.
+	osVault    func(prefix string) vault.Store
+	probeVault func(prefix string) error
 	// fullScreen shows the interface of bh without arguments (tui.Run).
 	fullScreen func(ctx context.Context, backend tui.Backend) error
 
@@ -142,11 +149,15 @@ const usageText = `usage: bh [command] [arguments]
   root-shell <env>    a root shell in the running environment (full
                       privileges, for troubleshooting)
   gpu list            the CDI devices the Docker engine offers
-  github set | status | revoke
-                      the GitHub token of an environment (bh github for details)
-  token list | set | remove
-                      other tokens of an environment: Hugging Face, or any
-                      variable you name (bh token for details)
+  var list | set | unset
+                      environment variables of an environment that are no
+                      secret (bh var for details)
+  secret list | set | remove | store
+                      secret values of yours an environment gets as variables;
+                      where this machine keeps them (bh secret for details)
+  token list | set | refresh | remove
+                      credentials a service issues for an environment: GitHub,
+                      Hugging Face (bh token for details)
   path [<env>]        print the configuration directory (of an environment)
   snapshot create | list | remove
                       the data of a stopped environment (workspace and home)
@@ -213,7 +224,8 @@ func (a *app) run(ctx context.Context, args []string) int {
 		"destroy":    a.destroy,
 		"migrate":    a.migrate,
 		"version":    a.version,
-		"github":     a.github,
+		"var":        a.variable,
+		"secret":     a.secret,
 		"token":      a.token,
 		"doctor":     a.doctor,
 		"completion": a.completion,

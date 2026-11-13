@@ -18,6 +18,7 @@ import (
 	"github.com/ys319/bulkhead/internal/github/githubtest"
 	"github.com/ys319/bulkhead/internal/image"
 	"github.com/ys319/bulkhead/internal/tui"
+	"github.com/ys319/bulkhead/internal/vault"
 )
 
 // noBuild fails the test if a command tries to build an image.
@@ -51,14 +52,34 @@ type bench struct {
 	opened  []string        // addresses handed to the browser
 	secret  string          // what is pasted at a hidden prompt
 	now     time.Time       // the clock; zero for the real one
+	// keychain stands in for the credential store of the operating system,
+	// across the commands of a test; noKeychain makes it one that cannot
+	// be used (as over ssh).
+	keychain   vault.Memory
+	noKeychain bool
+	// environ are other environment variables bh sees.
+	environ map[string]string
+	// answers are what the user picks when asked, one question after the
+	// other (before picks).
+	answers []string
 }
+
+// prefixed is a part of the keychain: the values filed under a prefix.
+type prefixed struct {
+	all    vault.Memory
+	prefix string
+}
+
+func (p prefixed) Get(key string) (string, error) { return p.all.Get(p.prefix + key) }
+func (p prefixed) Set(key, value string) error    { return p.all.Set(p.prefix+key, value) }
+func (p prefixed) Delete(key string) error        { return p.all.Delete(p.prefix + key) }
 
 func newBench(t *testing.T) *bench {
 	root := t.TempDir()
 	return &bench{
 		t: t, dir: filepath.Join(root, "bh"), legacy: filepath.Join(root, "bulkhead"), home: filepath.Join(root, "home"),
 		engine: enginetest.New(), path: map[string]bool{"code": true},
-		web: githubtest.New(t),
+		web: githubtest.New(t), keychain: vault.Memory{},
 	}
 }
 
@@ -81,7 +102,7 @@ func (b *bench) run(args ...string) (code int, stdout, stderr string) {
 			case "HOME":
 				return b.home
 			}
-			return ""
+			return b.environ[key]
 		},
 		goos: "linux",
 		dial: func(func(string) string) (dockerEngine, func(), error) {
@@ -112,10 +133,22 @@ func (b *bench) run(args ...string) (code int, stdout, stderr string) {
 			for _, choice := range choices {
 				b.offered = append(b.offered, choice.Name)
 			}
+			if len(b.answers) > 0 {
+				answer := b.answers[0]
+				b.answers = b.answers[1:]
+				return answer, nil
+			}
 			if b.picks == "" {
 				return "", tui.ErrNothingPicked
 			}
 			return b.picks, nil
+		},
+		osVault: func(prefix string) vault.Store { return prefixed{b.keychain, prefix} },
+		probeVault: func(string) error {
+			if b.noKeychain {
+				return errors.New("User interaction is not allowed")
+			}
+			return nil
 		},
 		httpClient: &http.Client{Transport: b.web},
 		openURL: func(address string) error {
