@@ -7,9 +7,9 @@ TS 版は隣の `../bulkhead-ts/`（退避済み。仕様・ADR・脅威モデ�
   **実機で未確認のもの**（§13）。
 - いまあるもの: 引数なしの TUI と、`create` / `configure` / `rename` / `up` / `down` /
   `restart` / `list` / `status` / `ssh` / `open` / `logs` / `init` / `root-shell` / `key` /
-  `remote` / `gpu` / `github` / `token` / `doctor` / `completion` / `path` / `reset` /
-  `destroy` / `migrate` / `version`。まだ無いもの（データの退避 = snapshot / export / import /
-  archive、`prune`、`--json`、Releases の自動ビルド）は仕様案 §13。
+  `remote` / `gpu` / `github` / `token` / `doctor` / `completion` / `path` / `snapshot` /
+  `rollback` / `export` / `import` / `archive` / `unarchive` / `reset` / `destroy` / `migrate` /
+  `version`。まだ無いもの（`prune`、`--json`、Releases の自動ビルド）は仕様案 §13。
 - 構成:
   - `cmd/bh` — 引数の解釈と表示。各機能は「データを返すコア関数」と「表示する薄い CLI 関数」に
     分ける（TUI は `cmd/bh/tui.go` の backend からコア関数を呼ぶ）。
@@ -22,6 +22,7 @@ TS 版は隣の `../bulkhead-ts/`（退避済み。仕様・ADR・脅威モデ�
   - `internal/image` — 埋め込んだ `containers/` と環境の dev.Dockerfile からイメージを用意。
   - `internal/sshkey` / `internal/sshconfig` — マシン鍵とフィンガープリント / `~/.ssh` の
     `Host bulkhead-<name>` と Include 行。
+  - `internal/snapshot` — スナップショットのファイル形式（読み書きと検証）。
   - `internal/doctor` — 検査（純関数。入力は設定とコンテナの実状態）。
   - `internal/tui` — 全画面の UI（Bubble Tea）。`Backend` インターフェース越しにしか動かない。
 - 設定ディレクトリは `~/.config/bh`（`BH_CONFIG_DIR`）。TS 版の `~/.config/bulkhead`
@@ -29,10 +30,15 @@ TS 版は隣の `../bulkhead-ts/`（退避済み。仕様・ADR・脅威モデ�
   `~/.ssh` 側も TS 版と別（`~/.ssh/bh/config` と `# >>> bh >>>` のブロック）。
   開発中の検証では `BH_CONFIG_DIR` / `BULKHEAD_CONFIG_DIR` / `BH_SSH_CONFIG`（ssh の設定
   ファイルの場所）を作業用の場所へ向ける。`HOME` は変えない — docker context の解決が変わる。
-- **ボリュームを消すのは `ops.removeVolumes` の1か所だけで、呼ぶのは `Destroy` と `Reset` だけ**
-  （`bh destroy` は名前の入力、`bh reset` は確認つき。reset が消すのは home と nix）。
-  migrate / undo / restart などほかの経路に足さない — `internal/ops` のテストがソースを数えて
-  確かめている。移行の守り事は仕様案 §11。
+- **データを消す操作は4つだけ。** ボリュームを消すのは `ops.removeVolumes` の1か所で、呼ぶのは
+  `Destroy` / `Reset` / `Archive`（`internal/ops` のテストがソースを数えて確かめている）。
+  ボリュームの中身を入れ替えるのは `engine.ReplaceVolume` で、通るのは `bh rollback` と、
+  作ったばかりのボリュームへ入れる `unarchive` / `import`。どれも確認つきで、rollback と
+  archive は、頼りにするスナップショットを最後まで読み通してから消す（仕様案 §8）。
+  migrate / undo / restart などほかの経路に足さない。移行の守り事は仕様案 §11。
+- ボリュームを空にするスクリプトをこの環境で走らせるテスト
+  （`internal/engine` の `TestReplaceScriptOnDirectories`）は、既定では動かない
+  （`BH_RUN_REPLACE_SCRIPT=1` を付けたときだけ）。ファイルを消すので、人が承知して動かす。
 - このリポジトリの作業環境には Docker が無いことがある。そのときは偽の Engine のテストまでで
   進め、実機で確かめていないものを仕様案 §13 の一覧に足す（`bh version` で接続を確かめられる）。
 

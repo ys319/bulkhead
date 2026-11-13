@@ -55,7 +55,26 @@ bh down web      # 止める（コンテナとデータは残る）
 `bh` だけで起動すると、同じ操作を全画面のメニューから行える。コマンドの一覧は `bh help`。
 
 設定は `~/.config/bh`（Windows は `%APPDATA%\bh`。`BH_CONFIG_DIR` で変えられる）に置かれる。
-環境のデータは Docker のボリュームにあり、**消すのは `bh destroy` と `bh reset` だけ**。
+環境のデータは Docker のボリュームにあり、**消すのは `bh destroy` / `bh reset` / `bh archive`
+（ボリュームごと）と `bh rollback`（中身の入れ替え）だけ**。どれも確認を求める。
+
+## データを取っておく
+
+止めた環境の workspace と home を1つのファイル（スナップショット）にできる。
+
+```
+bh snapshot create web        # 設定ディレクトリの snapshots/ に取る
+bh rollback web latest        # そこへ戻す（今の状態は先にスナップショットに取られる）
+bh export web ~/backup        # 好きな場所へ書き出す
+bh import ~/backup/bh-web-….tar.gz web2   # ファイルから新しい環境を作る
+bh archive web                # スナップショットを取ってボリュームを手放す（一覧には残る）
+bh unarchive web              # 戻す
+```
+
+スナップショットには nix ストアとキャッシュが入らない。アーカイブから戻したときやインポートした
+ときは、最初の起動で `init.sh` がもう一度走ってツールを入れ直す（`init.sh` に書いていない
+ツールは戻らない）。home の中身（ログイン情報・鍵・履歴）はそのまま入るので、ファイルは環境と
+同じように扱う。
 
 ## TypeScript 版から移る
 
