@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/ys319/bulkhead/internal/config"
+	"github.com/ys319/bulkhead/internal/plan"
 	"github.com/ys319/bulkhead/internal/sshconfig"
 )
 
@@ -32,7 +33,10 @@ func (a *app) openInEditor(ctx context.Context, store config.Store, env config.E
 	if err := a.writeSSH(store); err != nil {
 		return fmt.Errorf("the ssh configuration could not be updated: %w", err)
 	}
-	_, err := a.tool("code", []string{"--remote", "ssh-remote+" + sshconfig.Alias(env.Name)})
+	// The folder is what makes this a window of its own: with the remote
+	// alone, a VS Code that is already open is brought to the front and
+	// nothing else happens.
+	_, err := a.tool("code", []string{"--remote", "ssh-remote+" + sshconfig.Alias(env.Name), plan.Workspace})
 	return err
 }
 

@@ -44,9 +44,12 @@ var InjectKeys = []string{"github", "tokens"}
 // destroy removes.
 func AllVolumeKeys() []string { return append(append([]string{}, VolumeKeys...), InjectKeys...) }
 
+// Workspace is where the user's work lives inside dev: what an editor opens.
+const Workspace = "/home/developer/workspace"
+
 var volumeTargets = map[string]string{
 	"home":      "/home/developer",
-	"workspace": "/home/developer/workspace",
+	"workspace": Workspace,
 	"nix":       "/nix",
 	"hostkeys":  "/etc/bulkhead/hostkeys",
 	"github":    "/etc/bulkhead/github",
