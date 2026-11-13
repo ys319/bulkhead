@@ -76,6 +76,18 @@ func (m *Model) envMenu(id, name string) *menu {
 			return nil
 		}
 		name := state.Env.Name
+		if state.Env.Archived != "" {
+			return []item{
+				{label: "Unarchive", run: func(m *Model) tea.Cmd {
+					return m.do("Bringing "+name+" back", fmt.Sprintf("%q is back — Start runs init.sh and installs the tools", name), false, func(progress io.Writer) error {
+						return m.backend.Unarchive(m.ctx, name, progress)
+					})
+				}},
+				separator,
+				{label: "Rename", run: func(m *Model) tea.Cmd { m.push(m.askRename(name)); return nil }},
+				{label: "Destroy", color: red, run: func(m *Model) tea.Cmd { return m.askDestroy(name, true) }},
+			}
+		}
 		var items []item
 		if state.Known && active(*state) {
 			items = append(items,
@@ -226,6 +238,34 @@ func (m *Model) maintenanceMenu(id, name string) *menu {
 					return m.backend.RunInit(m.ctx, name, progress)
 				})
 			}})
+		}
+		if exists {
+			// The data can be read and replaced only while nothing uses it.
+			busy := ""
+			if state.Known && active(*state) {
+				busy = fmt.Sprintf("stop %q first", name)
+			}
+			items = append(items, separator,
+				item{label: "Snapshot", disabled: busy, run: func(m *Model) tea.Cmd {
+					return m.doThen("Taking a snapshot of "+name, false, func(progress io.Writer) (string, string, error) {
+						taken, err := m.backend.Snapshot(m.ctx, name, progress)
+						return fmt.Sprintf("snapshot %s of %q taken", taken, name), "", err
+					})
+				}},
+				item{label: "Roll back", color: yellow, disabled: busy, run: func(m *Model) tea.Cmd {
+					m.push(m.rollbackMenu(name))
+					return nil
+				}},
+				item{label: "Archive", color: yellow, disabled: busy, run: func(m *Model) tea.Cmd {
+					m.push(&confirm{name: "Archive " + name, color: yellow,
+						text: []string{"Take a snapshot, then remove the containers and volumes?", "The environment stays in the list. Unarchive brings the workspace and the home directory back; the nix store and caches do not come back — init.sh installs the tools again."},
+						onYes: func(m *Model) tea.Cmd {
+							return m.do("Archiving "+name, fmt.Sprintf("%q is archived", name), false, func(progress io.Writer) error {
+								return m.backend.Archive(m.ctx, name, progress)
+							})
+						}})
+					return nil
+				}})
 		}
 		return items
 	}}
@@ -782,4 +822,35 @@ func (p *printout) Run() error {
 	fmt.Fprintln(p.out, p.text)
 	waitForEnter(p.in)
 	return nil
+}
+
+// rollbackMenu lists the environment's snapshots, newest first. Choosing
+// one asks, and then puts its data back; what is there now is kept in a
+// snapshot of its own first.
+func (m *Model) rollbackMenu(name string) *menu {
+	entries, err := m.backend.Snapshots(name)
+	note := []string{"Put the workspace and the home directory back to a snapshot. What is there now is kept in a snapshot first."}
+	switch {
+	case err != nil:
+		note = []string{err.Error()}
+	case len(entries) == 0:
+		note = []string{fmt.Sprintf("%q has no snapshots yet — Maintenance → Snapshot takes one.", name)}
+	}
+	return &menu{name: "Roll back " + name, note: note, build: func(m *Model) []item {
+		items := make([]item, 0, len(entries))
+		for _, entry := range entries {
+			items = append(items, item{label: entry.About, run: func(m *Model) tea.Cmd {
+				m.push(&confirm{name: "Roll back " + name, color: yellow,
+					text: []string{"Replace the workspace and the home directory with this snapshot?", entry.About, "What is there now is kept in a snapshot first."},
+					onYes: func(m *Model) tea.Cmd {
+						return m.doThen("Rolling "+name+" back", false, func(progress io.Writer) (string, string, error) {
+							kept, err := m.backend.Rollback(m.ctx, name, entry.Name, progress)
+							return fmt.Sprintf("%q is rolled back — how it was is in the snapshot %s", name, kept), "", err
+						})
+					}})
+				return nil
+			}})
+		}
+		return items
+	}}
 }

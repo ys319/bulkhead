@@ -115,6 +115,9 @@ func (a *app) diagnose(ctx context.Context, ref string) ([]doctor.Section, error
 // at. registry and registryErr are the outcome of loading the key registry.
 func checkEnvironment(ctx context.Context, eng dockerEngine, store config.Store, env config.Environment,
 	registry []config.KeyEntry, registryErr error) []doctor.Finding {
+	if env.Archived != "" {
+		return doctor.CheckArchived(fileFact(filepath.Join(store.SnapshotsDir(env.ID), env.Archived)))
+	}
 	facts := environmentFacts(store, env, registry, registryErr)
 	if eng == nil {
 		facts.EngineDown = true

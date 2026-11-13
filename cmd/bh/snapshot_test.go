@@ -465,3 +465,20 @@ func TestSnapshotsOutliveADestroy(t *testing.T) {
 		t.Error("the data did not come back")
 	}
 }
+
+func TestDoctorOnAnArchivedEnvironment(t *testing.T) {
+	b := newBench(t)
+	b.path = map[string]bool{"code": true, "ssh": true, "docker": true}
+	id := withData(t, b, "web")
+	b.ok("archive", "web", "--yes")
+	if out := b.ok("doctor", "web"); !strings.Contains(out, "archived in ") || strings.Contains(out, "FAIL") {
+		t.Errorf("doctor:\n%s", out)
+	}
+	if err := os.Remove(filepath.Join(b.dir, "snapshots", id, b.env("web").Archived)); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _ := b.run("doctor", "web")
+	if !strings.Contains(out, "FAIL") || !strings.Contains(out, "its snapshot cannot be read") {
+		t.Errorf("doctor without the snapshot:\n%s", out)
+	}
+}

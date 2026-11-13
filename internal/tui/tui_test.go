@@ -22,11 +22,12 @@ import (
 // fake is a Backend that keeps everything in memory and records what was
 // asked of it.
 type fake struct {
-	snap    Snapshot
-	calls   []string
-	vscode  bool
-	fail    map[string]error // by the first word of a call
-	devices []string
+	snapshots []SnapshotEntry
+	snap      Snapshot
+	calls     []string
+	vscode    bool
+	fail      map[string]error // by the first word of a call
+	devices   []string
 }
 
 func (f *fake) call(format string, args ...any) error {
@@ -96,6 +97,36 @@ func (f *fake) Restart(_ context.Context, name string, _ io.Writer) error {
 	return f.call("restart %s", name)
 }
 func (f *fake) Reset(_ context.Context, name string) error { return f.call("reset %s", name) }
+func (f *fake) Snapshot(_ context.Context, name string, _ io.Writer) (string, error) {
+	return "2026-11-13T090000Z", f.call("snapshot %s", name)
+}
+func (f *fake) Snapshots(string) ([]SnapshotEntry, error) { return f.snapshots, nil }
+func (f *fake) Rollback(_ context.Context, name, snapshot string, _ io.Writer) (string, error) {
+	return "2026-11-13T100000Z", f.call("rollback %s %s", name, snapshot)
+}
+func (f *fake) Archive(_ context.Context, name string, _ io.Writer) error {
+	if err := f.call("archive %s", name); err != nil {
+		return err
+	}
+	for i := range f.snap.Envs {
+		if f.snap.Envs[i].Env.Name == name {
+			f.snap.Envs[i].Env.Archived = "2026-11-13T090000Z.tar.gz"
+			f.snap.Envs[i].Status = ops.Status{}
+		}
+	}
+	return nil
+}
+func (f *fake) Unarchive(_ context.Context, name string, _ io.Writer) error {
+	if err := f.call("unarchive %s", name); err != nil {
+		return err
+	}
+	for i := range f.snap.Envs {
+		if f.snap.Envs[i].Env.Name == name {
+			f.snap.Envs[i].Env.Archived = ""
+		}
+	}
+	return nil
+}
 func (f *fake) Destroy(_ context.Context, name string) error {
 	if err := f.call("destroy %s", name); err != nil {
 		return err
@@ -463,7 +494,7 @@ func TestEnvironmentMenuFollowsTheState(t *testing.T) {
 	}
 
 	s.pick("Maintenance")
-	if got, want := s.labels(), []string{"Root Shell", "Logs", "Edit Dockerfile", "Rebuild", "Rerun init.sh"}; !slices.Equal(got, want) {
+	if got, want := s.labels(), []string{"Root Shell", "Logs", "Edit Dockerfile", "Rebuild", "Rerun init.sh", "---", "Snapshot", "Roll back", "Archive"}; !slices.Equal(got, want) {
 		t.Errorf("maintenance, running: %q", got)
 	}
 	s.press("esc", "esc").onto("api").press("enter").pick("Maintenance")
@@ -999,5 +1030,58 @@ func TestMessageSitsAboveTheHints(t *testing.T) {
 	if len(loud) != 30 || !strings.Contains(plain(loud[29]), "q quit") ||
 		!strings.HasPrefix(plain(loud[28]), "something went wrong") || !strings.HasPrefix(plain(loud[27]), "└") {
 		t.Errorf("with a message: %d lines, last three %q / %q / %q", len(loud), plain(loud[27]), plain(loud[28]), plain(loud[29]))
+	}
+}
+
+// Snapshot, Roll back and Archive work on a stopped environment; running,
+// they say why not. An archived environment offers the way back and
+// little else.
+func TestSnapshotsAndArchive(t *testing.T) {
+	s := start(t)
+	s.backend.snapshots = []SnapshotEntry{
+		{Name: "2026-11-13T090000Z.tar.gz", About: "2026-11-13 18:00  1.2GB  manual  before the upgrade"},
+		{Name: "2026-11-12T090000Z.tar.gz", About: "2026-11-12 18:00  1.1GB  manual"},
+	}
+
+	// Running: the items are there and say what is in the way.
+	s.onto("web").press("enter").pick("Maintenance").pick("Snapshot")
+	s.shows(`stop "web" first`)
+	if slices.Contains(s.backend.calls, "snapshot web") {
+		t.Fatal("a snapshot of a running environment was taken")
+	}
+
+	s.press("esc", "esc").onto("web").press("enter").pick("Stop")
+	s.onto("web").press("enter").pick("Maintenance").pick("Snapshot")
+	s.called("snapshot web")
+	s.shows(`snapshot 2026-11-13T090000Z of "web" taken`)
+
+	// Rolling back names the snapshot and asks.
+	s.onto("web").press("enter").pick("Maintenance").pick("Roll back")
+	s.shows("before the upgrade", "2026-11-12 18:00")
+	s.press("down", "enter")
+	s.shows("Replace the workspace and the home directory with this snapshot?")
+	if slices.ContainsFunc(s.backend.calls, func(call string) bool { return strings.HasPrefix(call, "rollback") }) {
+		t.Fatal("rolled back before the answer")
+	}
+	s.press("right", "enter")
+	s.called("rollback web 2026-11-12T090000Z.tar.gz")
+	s.shows("how it was is in the snapshot 2026-11-13T100000Z")
+
+	// Archive asks, and the environment stays in the list.
+	s.onto("web").press("enter").pick("Maintenance").pick("Archive")
+	s.shows("Take a snapshot, then remove the containers and volumes?")
+	s.press("right", "enter")
+	s.called("archive web")
+	s.onto("web")
+	s.shows("state: archived", "Unarchive brings the")
+	s.press("enter")
+	if got, want := s.labels(), []string{"Unarchive", "---", "Rename", "Destroy"}; !slices.Equal(got, want) {
+		t.Errorf("archived: %q", got)
+	}
+	s.pick("Unarchive")
+	s.called("unarchive web")
+	s.onto("web").press("enter")
+	if !slices.Contains(s.labels(), "Start") {
+		t.Errorf("after unarchive: %q", s.labels())
 	}
 }

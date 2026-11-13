@@ -14,6 +14,13 @@ import (
 	"github.com/ys319/bulkhead/internal/ops"
 )
 
+// SnapshotEntry is one snapshot of an environment, newest first in a list.
+type SnapshotEntry struct {
+	Name string // what Rollback takes
+	// About says when, how large and why, in a line.
+	About string
+}
+
 // EnvState is an environment's settings with what the engine says about it.
 type EnvState struct {
 	Env config.Environment
@@ -98,6 +105,15 @@ type Backend interface {
 	SetGitHub(ctx context.Context, name, token, preset, tokenName string) (string, error)
 	RevokeGitHub(ctx context.Context, name string) (string, error)
 	OpenURL(address string) error
+
+	// Snapshots: the data of a stopped environment in one file. Snapshot
+	// returns the name of the one it took; Rollback the name of the one it
+	// took of the data that was there (see bh rollback).
+	Snapshot(ctx context.Context, name string, progress io.Writer) (string, error)
+	Snapshots(name string) ([]SnapshotEntry, error)
+	Rollback(ctx context.Context, name, snapshot string, progress io.Writer) (string, error)
+	Archive(ctx context.Context, name string, progress io.Writer) error
+	Unarchive(ctx context.Context, name string, progress io.Writer) error
 
 	// Programs that take the terminal over until they end.
 	Shell(name string) (*exec.Cmd, error)        // an ssh session

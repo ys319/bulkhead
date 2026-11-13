@@ -61,6 +61,9 @@ func envStyle(state EnvState, reach reachState) style {
 		}
 		return style{color: gray}
 	}
+	if state.Env.Archived != "" {
+		return style{color: gray, dim: true}
+	}
 	summary := ops.StateStopped
 	if state.Known {
 		summary = state.Status.State()

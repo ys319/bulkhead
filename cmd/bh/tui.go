@@ -11,6 +11,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/ys319/bulkhead/internal/engine"
 	"github.com/ys319/bulkhead/internal/ops"
 	"github.com/ys319/bulkhead/internal/plan"
+	"github.com/ys319/bulkhead/internal/snapshot"
 	"github.com/ys319/bulkhead/internal/tui"
 )
 
@@ -591,3 +594,56 @@ func (b backend) RevokeGitHub(ctx context.Context, name string) (string, error) 
 }
 
 func (b backend) OpenURL(address string) error { return b.a.openURL(address) }
+
+func (b backend) Snapshot(ctx context.Context, name string, progress io.Writer) (string, error) {
+	taken, _, err := b.quiet(progress).createSnapshot(ctx, name, snapshot.KindManual, "", "")
+	return strings.TrimSuffix(filepath.Base(taken.Path), snapshot.Extension), err
+}
+
+// Snapshots lists the environment's snapshots, newest first.
+func (b backend) Snapshots(name string) ([]tui.SnapshotEntry, error) {
+	store, cfg, err := b.a.load()
+	if err != nil {
+		return nil, err
+	}
+	env, err := cfg.Find(name)
+	if err != nil {
+		return nil, err
+	}
+	found, err := listSnapshots(store, env.ID)
+	if err != nil {
+		return nil, err
+	}
+	var entries []tui.SnapshotEntry
+	for _, s := range slices.Backward(found) {
+		if s.Err != nil {
+			continue
+		}
+		about := fmt.Sprintf("%s  %s  %s", s.Manifest.Created.Local().Format("2006-01-02 15:04"), tui.HumanBytes(s.Size), s.Manifest.Kind)
+		if s.Manifest.Note != "" {
+			about += "  " + s.Manifest.Note
+		}
+		entries = append(entries, tui.SnapshotEntry{Name: s.Name, About: about})
+	}
+	return entries, nil
+}
+
+func (b backend) Rollback(ctx context.Context, name, snapshotName string, progress io.Writer) (string, error) {
+	a := b.quiet(progress)
+	store, planned, err := a.planRollback(name, snapshotName, "")
+	if err != nil {
+		return "", err
+	}
+	kept, err := a.rollBack(ctx, store, planned, true)
+	return strings.TrimSuffix(kept, snapshot.Extension), err
+}
+
+func (b backend) Archive(ctx context.Context, name string, progress io.Writer) error {
+	_, _, err := b.quiet(progress).archiveEnv(ctx, name)
+	return err
+}
+
+func (b backend) Unarchive(ctx context.Context, name string, progress io.Writer) error {
+	_, err := b.quiet(progress).unarchiveEnv(ctx, name)
+	return err
+}

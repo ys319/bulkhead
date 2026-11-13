@@ -221,6 +221,15 @@ func (m *Model) detail(inner, rows int) []string {
 func (m *Model) localDetail(state EnvState, inner, rows int) []string {
 	env := state.Env
 	lines := []string{bold(env.Name)}
+	if env.Archived != "" {
+		lines = append(lines, field(inner, "state", "archived")...)
+		lines = append(lines, field(inner, "snapshot", strings.TrimSuffix(env.Archived, ".tar.gz"))...)
+		lines = append(lines, doctorLines(state.Findings, inner)...)
+		for _, line := range wrap("Its containers and volumes are put away. Unarchive brings the workspace and the home directory back; init.sh installs the tools again.", inner) {
+			lines = append(lines, dim(line))
+		}
+		return lines
+	}
 
 	// What it is doing now comes first, without a heading: when the pane
 	// is too short it is cut from the bottom, and these are the lines that

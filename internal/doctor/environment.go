@@ -76,6 +76,16 @@ func CheckRemote() []Finding {
 	return []Finding{skip("remote environment — run bh doctor on the machine it lives on")}
 }
 
+// CheckArchived is the section of an archived environment. It has no
+// containers to check; what it has is the snapshot its data is in, and
+// without that file there is no environment to bring back.
+func CheckArchived(snapshot File) []Finding {
+	if snapshot.Err != nil {
+		return []Finding{fail(fmt.Sprintf("archived, but its snapshot cannot be read: %v\n(the environment's data is in that file — restore it from a copy if there is one)", snapshot.Err))}
+	}
+	return []Finding{ok("archived in " + snapshot.Path)}
+}
+
 // CheckBroken is the section of an environment whose settings cannot be
 // read. It counts as a failure: a diagnosis that passes over it would say
 // "no failures" about an environment nobody can start.
