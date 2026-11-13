@@ -345,6 +345,17 @@ func (a *app) migrateOne(ctx context.Context, legacy config.LegacyStore, store c
 	default:
 		fmt.Fprintf(out, "  it is stopped — start it with bh up %s\n", name)
 	}
+	// Its token records came along in the TypeScript version's form
+	// (github.json, tokens.json with the values in them). Taken over now,
+	// the values go to where this machine keeps them and leave the files.
+	// If that cannot be done here — no credential store, and no decision
+	// yet to use a file — the records stay as they are and are taken over
+	// the next time they are read.
+	if env.Local() {
+		if _, err := a.credentialsOf(store, env, true); err != nil {
+			fmt.Fprintf(out, "  its tokens were not taken over yet: %s\n  (they are the next time they are read — bh token list %s)\n", oneLine(err), name)
+		}
+	}
 	fmt.Fprintf(out, "  old settings: %s\n", legacy.RetiredDir(name))
 	for _, leftover := range adoption.Leftovers {
 		fmt.Fprintf(out, "  left behind (remove by hand): %s\n", leftover)

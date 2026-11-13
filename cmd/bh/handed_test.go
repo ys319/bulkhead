@@ -759,3 +759,72 @@ func TestRecordsOfEarlierBuildsAreTakenOver(t *testing.T) {
 		t.Errorf("github volume: %q", writes)
 	}
 }
+
+// bh migrate takes the TypeScript version's token records over: the values
+// go to where this machine keeps them, and the old preset name is read as
+// today's.
+func TestMigrateTakesTheTokenRecordsOver(t *testing.T) {
+	b := newBench(t)
+	dir := b.legacyEnv("web", `{"type": "local", "sshPort": 22001}`)
+	b.write(filepath.Join(dir, "github.json"), `{"token": "`+patNew+`", "preset": "push+pr", "owner": "octo", "tokenName": "bh-web-10121530",
+		"issuedAt": "2026-10-12T06:30:00.000Z", "expiresAt": "2027-10-12T06:30:00.000Z", "repos": ["octo/a", "octo/b"]}`)
+	b.write(filepath.Join(dir, "tokens.json"), `{"tokens": [
+		{"kind": "hf", "name": "HF_TOKEN", "value": "`+hfToken+`", "addedAt": "2026-10-13T00:00:00.000Z"},
+		{"kind": "custom", "name": "API_KEY", "value": "k-123", "addedAt": "2026-10-14T00:00:00.000Z"}]}`)
+	b.engine.AddLegacy("web", false)
+	volumes := maps.Clone(b.engine.Volumes)
+
+	out := b.ok("migrate", "web", "--yes")
+	if strings.Contains(out, "not taken over yet") {
+		t.Errorf("output:\n%s", out)
+	}
+	id := b.env("web").ID
+	if b.kept(id, "token/github") != patNew || b.kept(id, "token/huggingface") != hfToken || b.kept(id, "secret/API_KEY") != "k-123" {
+		t.Errorf("keychain = %v", b.keychain)
+	}
+	if github := b.githubState("web"); github == nil || github.Preset != "contribute" || len(github.Repos) != 2 {
+		t.Errorf("github = %+v", github)
+	}
+	entries, _ := os.ReadDir(b.store().EnvDir(id))
+	for _, entry := range entries {
+		data, _ := os.ReadFile(filepath.Join(b.store().EnvDir(id), entry.Name()))
+		for _, value := range []string{patNew, hfToken, "k-123"} {
+			if strings.Contains(string(data), value) {
+				t.Errorf("%s in bh's directory still holds a value", entry.Name())
+			}
+		}
+	}
+	// The old version's own files are where they were moved to, as they
+	// were: handing the environment back needs them.
+	b.noVolumeRemoved(volumes)
+	b.ok("up", "web")
+	if got := b.lastEnvWrite(); got != "API_KEY=k-123\nHF_TOKEN="+hfToken+"\n" {
+		t.Errorf("the environment got %q", got)
+	}
+}
+
+// Where there is no credential store and nothing is decided, the migration
+// still goes through; the records wait in their old form.
+func TestMigrateWithoutACredentialStoreLeavesTheRecordsForLater(t *testing.T) {
+	b := newBench(t)
+	b.noKeychain = true
+	dir := b.legacyEnv("web", `{"type": "local", "sshPort": 22001}`)
+	b.write(filepath.Join(dir, "tokens.json"), `{"tokens": [{"kind": "custom", "name": "API_KEY", "value": "k-123", "addedAt": "2026-10-14T00:00:00.000Z"}]}`)
+	b.engine.AddLegacy("web", false)
+
+	out := b.ok("migrate", "web", "--yes")
+	if !strings.Contains(out, "its tokens were not taken over yet") || !strings.Contains(out, "bh secret store file") {
+		t.Errorf("output:\n%s", out)
+	}
+	if err := b.fails(1, "up", "web"); !strings.Contains(err, "bh secret store file") {
+		t.Errorf("up: %s", err)
+	}
+	b.ok("secret", "store", "file")
+	b.ok("up", "web")
+	if got := b.lastEnvWrite(); got != "API_KEY=k-123\n" {
+		t.Errorf("the environment got %q", got)
+	}
+	if list := b.ok("secret", "list", "web"); list != "API_KEY\n" {
+		t.Errorf("secrets: %q", list)
+	}
+}
