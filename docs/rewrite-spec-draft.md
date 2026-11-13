@@ -841,8 +841,8 @@ exec の端末接続が Windows 固有の不確定要素）。
   環境メニュー・Settings の Runtime / SSH・Maintenance・Keys・Machine key・確認ダイアログ・
   起動中は変えられない設定のグレーアウト・events 購読と r・下段のメッセージと m）。
   端末を明け渡すもの（ssh・logs・root shell・エディタ・再ビルド）は子プロセスへ渡して戻る。
-  環境名を省いたコマンド（`up` / `down` / `restart` / `logs` / `status` / `ssh` / `open`）は
-  端末なら選択を出す。
+  環境名を省いたコマンドが選択を出す機能は移したが、取りやめた（決定 2026-11-13 — **CLI は
+  対話なし、TUI は対話あり**。選ぶのは補完の役目 — §7）。
 - **ディスク使用量**: `status` と TUI の詳細に出す（一覧では取らない）。
 
 **実機での確認（2026-11-13、macOS・Docker Desktop 29.9.3・arm64）。**
@@ -868,6 +868,12 @@ exec の端末接続が Windows 固有の不確定要素）。
   - 値つきの行があるメニュー（Runtime など）が画面いっぱいに広がった。
   - スクリプト側の間違い2つ（`bh init` の再実行の行数の読み方、トークンの検査が飛ばされる）。
 
+**var / secret と資格情報ストア（同日、`4d8c20b` のビルド）: `BH_VERIFY_KEYCHAIN=1
+scripts/verify-features.sh` が 89 項目通過・失敗 0。** 空白・引用符・`$` を含む値がそのまま新しい
+シェルに届くこと、小文字の名前、secret の値が記録に残らないこと、macOS のキーチェーンに値が入り
+（ファイルには残らず）`bh restart` で読み戻せ、消すと項目が無くなること。（1回目はスクリプトが
+テスト用の名前を `BH_` で始めていて、bh が予約済みとして断り、失敗した。）
+
 **reset の2段階とラベルの切り替え（同日、`72efe5a` のビルド）: `scripts/verify-features.sh` が
 70 項目通過・失敗 0、続く境界の検査も 54 項目すべて通過。** ツールの段階（home の nix の状態を
 イメージから入れ直すスクリプトが実際に走った最初）と `--home` の段階、新しい接頭辞のラベルで
@@ -889,8 +895,7 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | 対象 | 確かめること |
 | --- | --- |
 | 上の修正 (手) | `bh open` が新しいウィンドウを開く / TUI の Logs から Ctrl-C で TUI へ戻る / 失敗した ssh の後で Enter を待つ / `HostKeyAlias` つきの項目で VS Code Remote SSH がつながる / メニューの幅 / 下段の並び（メッセージ → 操作説明） |
-| var / secret | `scripts/verify-features.sh` の「variables and secrets」の節: 空白・引用符・`$` を含む値がそのまま新しいシェルに届く、小文字の名前、secret の値が記録に残らない、外すと消える。**環境の中で値を読む側（bh-guest の引用）を変えたので、dev イメージが作り直される** |
-| 資格情報ストア (手) | `BH_VERIFY_KEYCHAIN=1 scripts/verify-features.sh <bh>` — 自分のキーチェーンに値を1つ入れて出す（既定では走らない）。macOS のキーチェーンで、値がファイルに残らず、`bh restart` で読み戻せ、消すと項目が無くなること。ssh 越しなど使えない場所で「ファイルにする」案内が出ること。Windows・Linux は未確認 |
+| 資格情報ストア (手) | ssh 越しなど使えない場所で「ファイルにする」案内が出ること。Windows・Linux は未確認（macOS のキーチェーンは 2026-11-13 に通過 — 上） |
 | 補完 (手) | `eval "$(bh completion zsh)"` で、`bh token set <env> ` の後にサービス、その後にプリセットが説明つきで弱い順に出る / `bh var unset <env> ` で変数名 / `bh rollback <env> ` でスナップショット。ここでは本物の zsh を擬似端末で動かして確かめた。bash は入口のスクリプトだけ確かめた |
 | token (手) | 本物のトークンで: `bh token set <env> <service> <preset>`、GitHub の3つのプリセットで発行ページに入る権限、`bh token refresh`（Regenerate して貼る）、`bh token remove` の失効、Hugging Face の種類の読み取りと失効（**Hugging Face の API は文書を読んだだけで、一度も呼んでいない**）、`gh run view --log` が `push` で通ること、期限が近いときの表示。前のビルドで設定したトークン（`github.json`）が読み替えられること |
 | GitHub トークン (手) | `revoke`、`destroy` 時の失効、git と gh から使えること。Windows のコンソールでの非表示入力 |
@@ -927,7 +932,7 @@ TS 版と違うところ（移植で変えたもの）:
   warn に置き換えた。
 - TUI の GitHub トークンの発行は preset だけを選ぶ（owner と期限を変えるのは CLI の
   `bh github set --owner / --days`）。
-- 環境名を省いたときの選択は、状態を引かずに名前と接続先だけを並べる。
+- 環境名を省いたときの選択は無い（CLI は何も聞かない。引数の候補は補完が出す）。
 
 ## 14. 開発環境（flake.nix の devShell）
 
