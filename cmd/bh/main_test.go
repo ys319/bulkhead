@@ -17,7 +17,6 @@ import (
 	"github.com/ys319/bulkhead/internal/engine/enginetest"
 	"github.com/ys319/bulkhead/internal/github/githubtest"
 	"github.com/ys319/bulkhead/internal/image"
-	"github.com/ys319/bulkhead/internal/tui"
 	"github.com/ys319/bulkhead/internal/vault"
 )
 
@@ -45,9 +44,6 @@ type bench struct {
 	typing  bool            // stdin is a terminal
 	builder image.Builder   // nil: any build fails the test
 	raw     int             // how often the terminal was put in raw mode
-	picks   string          // what the user chooses when asked which environment
-	asked   string          // the question that was asked
-	offered []string        // the names that were offered
 	web     *githubtest.Web // the services tokens come from; any other request fails the test
 	opened  []string        // addresses handed to the browser
 	secret  string          // what is pasted at a hidden prompt
@@ -59,9 +55,6 @@ type bench struct {
 	noKeychain bool
 	// environ are other environment variables bh sees.
 	environ map[string]string
-	// answers are what the user picks when asked, one question after the
-	// other (before picks).
-	answers []string
 }
 
 // prefixed is a part of the keychain: the values filed under a prefix.
@@ -128,22 +121,7 @@ func (b *bench) run(args ...string) (code int, stdout, stderr string) {
 			return "", errors.New("not found")
 		},
 		isTerminal: func() bool { return b.typing },
-		pick: func(_ context.Context, title string, choices []tui.Choice) (string, error) {
-			b.asked = title
-			for _, choice := range choices {
-				b.offered = append(b.offered, choice.Name)
-			}
-			if len(b.answers) > 0 {
-				answer := b.answers[0]
-				b.answers = b.answers[1:]
-				return answer, nil
-			}
-			if b.picks == "" {
-				return "", tui.ErrNothingPicked
-			}
-			return b.picks, nil
-		},
-		osVault: func(prefix string) vault.Store { return prefixed{b.keychain, prefix} },
+		osVault:    func(prefix string) vault.Store { return prefixed{b.keychain, prefix} },
 		probeVault: func(string) error {
 			if b.noKeychain {
 				return errors.New("User interaction is not allowed")

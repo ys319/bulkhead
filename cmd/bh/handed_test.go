@@ -417,7 +417,7 @@ func TestTokenArgumentsAreNotAskedFor(t *testing.T) {
 	b := newBench(t)
 	b.ok("create", "web")
 	b.web.Accept("octo")
-	b.typing, b.secret, b.picks = true, patNew, "web"
+	b.typing, b.secret = true, patNew
 
 	for args, part := range map[string]string{
 		"":           "usage: bh token set <env> <service>",
@@ -433,8 +433,8 @@ func TestTokenArgumentsAreNotAskedFor(t *testing.T) {
 	if err := b.fails(2, "token", "set", "web", "github"); !strings.Contains(err, "contribute") || !strings.Contains(err, "also push") {
 		t.Errorf("the presets are not listed: %s", err)
 	}
-	if b.asked != "" || len(b.offered) != 0 || len(b.tokens("web")) != 0 {
-		t.Errorf("something was asked (%q, %v) or kept", b.asked, b.offered)
+	if len(b.tokens("web")) != 0 {
+		t.Errorf("something was kept: %v", b.tokens("web"))
 	}
 
 	// The service may be left out where there is one token only.
@@ -449,9 +449,6 @@ func TestTokenArgumentsAreNotAskedFor(t *testing.T) {
 		if err := b.fails(2, "token", command, "web"); !strings.Contains(err, "tokens of github and huggingface: say which") {
 			t.Errorf("bh token %s web with two tokens: %s", command, err)
 		}
-	}
-	if b.asked != "" {
-		t.Errorf("asked %q", b.asked)
 	}
 }
 

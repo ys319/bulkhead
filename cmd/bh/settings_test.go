@@ -337,34 +337,22 @@ func TestDestroyForgetsTheHostKeyAndTheSSHEntry(t *testing.T) {
 	}
 }
 
-func TestACommandWithoutAnEnvironmentAsksWhich(t *testing.T) {
+// The commands ask for nothing: without the environment a command needs,
+// it says how it is used — at a terminal as anywhere else. Asking is the
+// full-screen interface's part.
+func TestACommandWithoutAnEnvironmentSaysHowItIsUsed(t *testing.T) {
 	b := newBench(t)
 	b.ok("create", "web")
-	b.ok("create", "api")
-	b.ok("remote", "add", "studio.test:22001/main")
-
-	// Not at a terminal: the usage, as before.
-	b.fails(2, "up")
-
-	b.typing, b.picks = true, "web"
-	b.ok("up")
-	if b.asked != "bh up — which environment?" || !slices.Equal(b.offered, []string{"api", "web"}) {
-		t.Errorf("asked %q, offered %v (up is for local environments)", b.asked, b.offered)
+	for _, typing := range []bool{false, true} {
+		b.typing = typing
+		for _, command := range []string{"up", "down", "restart", "logs", "status", "ssh", "open"} {
+			if err := b.fails(2, command); !strings.Contains(err, "usage: bh "+command) {
+				t.Errorf("bh %s (at a terminal: %v): %s", command, typing, err)
+			}
+		}
 	}
-	if !b.engine.Containers["bulkhead-"+b.env("web").ID+"-dev"].Running() {
-		t.Error("web was not started")
-	}
-
-	b.offered = nil
-	b.ok("status")
-	if !slices.Equal(b.offered, []string{"api", "main", "web"}) {
-		t.Errorf("status offered %v", b.offered)
-	}
-
-	// Leaving the list does nothing and says nothing.
-	b.picks = ""
-	if code, _, stderr := b.run("down"); code != 1 || stderr != "" {
-		t.Errorf("cancelled: exit %d, stderr %q", code, stderr)
+	if len(b.engine.Calls) != 0 {
+		t.Errorf("something was done: %v", b.engine.Calls)
 	}
 }
 

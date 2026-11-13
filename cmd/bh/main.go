@@ -32,7 +32,7 @@ func main() {
 		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
 		getenv: os.Getenv, goos: runtime.GOOS,
 		dial: dialEngine, ssh: systemSSH, builder: engine.CLIBuilder{},
-		tool: runTool, lookPath: exec.LookPath, isTerminal: stdinIsTerminal, rawTerminal: rawTerminal, pick: tui.Pick, fullScreen: tui.Run,
+		tool: runTool, lookPath: exec.LookPath, isTerminal: stdinIsTerminal, rawTerminal: rawTerminal, fullScreen: tui.Run,
 		osVault: func(prefix string) vault.Store { return vault.OS{Prefix: prefix} }, probeVault: vault.Probe,
 		httpClient: newHTTPClient(), openURL: openInBrowser, readSecret: readHiddenLine, now: time.Now,
 	}
@@ -84,8 +84,6 @@ type app struct {
 	// go through unprocessed until restore is called. size reports the
 	// terminal's size.
 	rawTerminal func() (restore func(), size func() (height, width uint), err error)
-	// pick asks the user to choose from a list.
-	pick func(ctx context.Context, title string, choices []tui.Choice) (string, error)
 	// osVault is the credential store of the operating system, for the
 	// values filed under the prefix; probeVault reports whether it can be
 	// used on this machine.
@@ -188,8 +186,9 @@ const usageText = `usage: bh [command] [arguments]
                       they are, the boundary of every environment (or of one)
   completion zsh|bash print a completion script (eval it in the shell's rc)
 
-  Without <env>, up / down / restart / logs / status / ssh / open ask which
-  (at a terminal).
+  Commands ask for nothing that was left out. Choosing is done with the
+  Tab completion of the shell (bh completion), or in the full-screen
+  UI that bh without arguments opens.
 `
 
 func (a *app) run(ctx context.Context, args []string) int {
@@ -246,15 +245,10 @@ func (a *app) run(ctx context.Context, args []string) int {
 		return 2
 	}
 
-	rest := args[1:]
-	if localOnly, asks := pickable[name]; asks && len(rest) == 0 && a.isTerminal() {
-		chosen, err := a.askWhich(ctx, name, localOnly)
-		if err != nil {
-			return a.finish(err)
-		}
-		rest = []string{chosen}
-	}
-	return a.finish(command(ctx, rest))
+	// A command is taken at its word and asks for nothing it was not
+	// given: choosing is what the shell completion and the full-screen
+	// interface (bh without arguments) are for.
+	return a.finish(command(ctx, args[1:]))
 }
 
 // finish turns the way a command ended into the exit status, saying what

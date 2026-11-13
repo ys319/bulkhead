@@ -463,38 +463,6 @@ func (b backend) FollowLogs(ctx context.Context, name string, tail int, out io.W
 	return streamLogs(ctx, eng, status, engine.LogOptions{Follow: true, Tail: tail}, out)
 }
 
-// pickable are the commands that ask which environment when none is named
-// (at a terminal), and whether they are for local environments only.
-var pickable = map[string]bool{
-	"up": true, "down": true, "restart": true, "logs": true,
-	"status": false, "ssh": false, "open": false,
-}
-
-// askWhich lets the user choose the environment a command was not given.
-func (a *app) askWhich(ctx context.Context, command string, localOnly bool) (string, error) {
-	_, cfg, err := a.load()
-	if err != nil {
-		return "", err
-	}
-	var choices []tui.Choice
-	for _, env := range cfg.Envs {
-		switch {
-		case env.Local():
-			choices = append(choices, tui.Choice{Name: env.Name, Note: sshAddress(env)})
-		case !localOnly:
-			choices = append(choices, tui.Choice{Name: env.Name, Note: "remote, " + sshAddress(env)})
-		}
-	}
-	if len(choices) == 0 {
-		return "", usagef("usage: bh %s <env> (there is no environment to choose from yet)", command)
-	}
-	name, err := a.pick(ctx, "bh "+command+" — which environment?", choices)
-	if errors.Is(err, tui.ErrNothingPicked) {
-		return "", exitCode(1)
-	}
-	return name, err
-}
-
 func (b backend) DiskUsage(ctx context.Context) (map[string]int64, error) {
 	eng, disconnect, err := b.a.dial(b.a.getenv)
 	if err != nil {
