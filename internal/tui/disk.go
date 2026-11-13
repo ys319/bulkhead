@@ -21,6 +21,9 @@ func humanBytes(size int64) string {
 	return fmt.Sprintf("%.1f%s", value, units[unit])
 }
 
+// HumanBytes writes a size the way docker does.
+func HumanBytes(size int64) string { return humanBytes(size) }
+
 // DiskSummary is what an environment's volumes take: the total of all of
 // them, and the three that hold data one by one. ok is false when none of
 // its volumes is among the sizes (it was never started).

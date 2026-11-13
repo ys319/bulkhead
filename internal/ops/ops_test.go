@@ -374,10 +374,32 @@ func TestResetRemovesHomeAndNixOnly(t *testing.T) {
 	}
 }
 
-func TestOnlyDestroyAndResetRemoveVolumes(t *testing.T) {
+func TestArchiveKeepsOnlyTheHostIdentity(t *testing.T) {
+	f := enginetest.New()
+	r := runner(f)
+	if err := r.Up(context.Background(), env, target); err != nil {
+		t.Fatal(err)
+	}
+	f.Calls = nil
+
+	if err := r.Archive(context.Background(), env.ID); err != nil {
+		t.Fatal(err)
+	}
+	expectCalls(t, f,
+		"stop "+devName, "stop "+holderName,
+		"remove "+devName, "remove "+holderName,
+		"rm-volume bulkhead-e1_workspace", "rm-volume bulkhead-e1_home", "rm-volume bulkhead-e1_nix",
+		"rm-volume bulkhead-e1_github", "rm-volume bulkhead-e1_tokens",
+		"rm-network bulkhead-e1")
+	if !f.Volumes["bulkhead-e1_hostkeys"] {
+		t.Error("the ssh host identity is gone")
+	}
+}
+
+func TestOnlyDestroyResetAndArchiveRemoveVolumes(t *testing.T) {
 	// The rule the project is built around, checked on the source: the
 	// engine's RemoveVolume is called from removeVolumes, and removeVolumes
-	// from Destroy and Reset.
+	// from Destroy, Reset and Archive.
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -394,7 +416,7 @@ func TestOnlyDestroyAndResetRemoveVolumes(t *testing.T) {
 		removers += strings.Count(string(data), ".RemoveVolume(ctx")
 		callers += strings.Count(string(data), "r.removeVolumes(")
 	}
-	if removers != 1 || callers != 2 {
-		t.Errorf("RemoveVolume is called from %d places (want 1), removeVolumes from %d (want 2: Destroy and Reset)", removers, callers)
+	if removers != 1 || callers != 3 {
+		t.Errorf("RemoveVolume is called from %d places (want 1), removeVolumes from %d (want 3: Destroy, Reset and Archive)", removers, callers)
 	}
 }

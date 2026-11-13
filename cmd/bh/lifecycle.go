@@ -74,6 +74,9 @@ func (a *app) newLocal(name, from string, edit func(*config.Environment)) (confi
 		source = &found
 		env = found
 		env.ID, env.Name, env.SSHPort = id, name, cfg.SuggestPort()
+		// The copy is a new environment with fresh volumes, whatever state
+		// the one it was copied from is in.
+		env.Archived = ""
 	}
 	if edit != nil {
 		edit(&env)
@@ -168,6 +171,12 @@ func (a *app) localEnv(command, ref string) (config.Store, config.Environment, e
 	}
 	if !env.Local() {
 		return store, env, fmt.Errorf("%q is a remote environment: %s works on local ones", env.Name, command)
+	}
+	// An archived environment has no containers and no data to work on.
+	// Its dev.Dockerfile is still there to edit, and stopping it is what
+	// it already is.
+	if env.Archived != "" && command != "down" && command != "dev.Dockerfile" {
+		return store, env, archivedError(env)
 	}
 	return store, env, nil
 }
@@ -295,6 +304,32 @@ func keptOutOfBuilds(name string) bool {
 	return strings.HasSuffix(name, ".tmp") || strings.HasPrefix(name, ".")
 }
 
+// devImage is the image dev runs from, built unless the engine has it (or
+// in any case with rebuild): the base, or the environment's own when it
+// has a dev.Dockerfile — the user's steps on top of the base.
+func (a *app) devImage(ctx context.Context, eng dockerEngine, store config.Store, id string, rebuild *image.Options) (string, error) {
+	ref, err := image.EnsureWith(ctx, eng, a.builder, devBaseSource(), rebuild, a.stderr)
+	if err != nil {
+		return "", err
+	}
+	if _, statErr := os.Stat(store.DevDockerfile(id)); statErr == nil {
+		if err := eng.TagImage(ctx, ref, devBaseAlias); err != nil {
+			return "", fmt.Errorf("naming the base image for dev.Dockerfile: %w", err)
+		}
+		var again *image.Options
+		if rebuild != nil {
+			// Not Pull: the base exists on this machine only.
+			again = &image.Options{NoCache: rebuild.NoCache}
+		}
+		if ref, err = image.EnsureWith(ctx, eng, a.builder, devSource(store, id, ref), again, a.stderr); err != nil {
+			return "", fmt.Errorf("building %s: %w", store.DevDockerfile(id), err)
+		}
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return "", statErr
+	}
+	return ref, nil
+}
+
 // realize fills in what only the engine can tell: the images (built unless
 // it already has them, or in any case with rebuild), the socket's group
 // with the opt-in, and the groups of the GPU devices.
@@ -303,28 +338,8 @@ func (a *app) realize(ctx context.Context, eng dockerEngine, store config.Store,
 	if err != nil {
 		return err
 	}
-	target.DevImage, err = image.EnsureWith(ctx, eng, a.builder, devBaseSource(), rebuild, a.stderr)
-	if err != nil {
+	if target.DevImage, err = a.devImage(ctx, eng, store, env.ID, rebuild); err != nil {
 		return err
-	}
-
-	// The environment's own image, when it has a dev.Dockerfile: the user's
-	// steps on top of the base.
-	if _, statErr := os.Stat(store.DevDockerfile(env.ID)); statErr == nil {
-		if err := eng.TagImage(ctx, target.DevImage, devBaseAlias); err != nil {
-			return fmt.Errorf("naming the base image for dev.Dockerfile: %w", err)
-		}
-		var again *image.Options
-		if rebuild != nil {
-			// Not Pull: the base exists on this machine only.
-			again = &image.Options{NoCache: rebuild.NoCache}
-		}
-		target.DevImage, err = image.EnsureWith(ctx, eng, a.builder, devSource(store, env.ID, target.DevImage), again, a.stderr)
-		if err != nil {
-			return fmt.Errorf("building %s: %w", store.DevDockerfile(env.ID), err)
-		}
-	} else if !errors.Is(statErr, fs.ErrNotExist) {
-		return statErr
 	}
 
 	if env.DockerSocket {

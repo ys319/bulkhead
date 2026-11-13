@@ -135,6 +135,9 @@ func (a *app) requireRunning(ctx context.Context, env config.Environment) error 
 	if !env.Local() {
 		return nil // its state cannot be seen from this machine's Docker
 	}
+	if env.Archived != "" {
+		return archivedError(env)
+	}
 	status, err := a.inspect(ctx, env)
 	if err != nil {
 		return err

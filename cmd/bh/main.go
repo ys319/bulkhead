@@ -51,6 +51,8 @@ type dockerEngine interface {
 	Watch(ctx context.Context, label string) (changes <-chan struct{}, done <-chan error)
 	VolumeSizes(ctx context.Context) (map[string]int64, error)
 	WriteVolume(ctx context.Context, job engine.VolumeJob, input []byte) error
+	ReadVolume(ctx context.Context, job engine.VolumeTar, out io.Writer) error
+	ReplaceVolume(ctx context.Context, job engine.VolumeTar, in io.Reader) error
 	RunInVolume(ctx context.Context, job engine.VolumeJob) error
 	Describe(ctx context.Context, name string) (*engine.Description, error)
 	Info(ctx context.Context) (engine.Info, error)
@@ -145,6 +147,20 @@ const usageText = `usage: bh [command] [arguments]
                       other tokens of an environment: Hugging Face, or any
                       variable you name (bh token for details)
   path [<env>]        print the configuration directory (of an environment)
+  snapshot create | list | remove
+                      the data of a stopped environment (workspace and home)
+                      in one file (bh snapshot for details)
+  rollback <env> <snapshot | latest | file> [--only workspace|home]
+                      put a snapshot's data back; what is there now is kept
+                      in a snapshot first (--no-snapshot: is deleted)
+  export <env> [<file or directory>]
+                      write a snapshot to a place of your choosing
+  import <file> [<name>]
+                      make a new environment from a snapshot file
+  archive <env> [--yes]
+                      take a snapshot, then remove containers and volumes;
+                      the environment stays in the list
+  unarchive <env>     bring an archived environment back
   reset <env> [--yes] delete home and nix, keep the workspace
   destroy <env> [--yes]
                       remove the environment and its data
@@ -183,6 +199,12 @@ func (a *app) run(ctx context.Context, args []string) int {
 		"gpu":        a.gpu,
 		"path":       a.path,
 		"reset":      a.reset,
+		"snapshot":   a.snapshot,
+		"rollback":   a.rollback,
+		"export":     a.export,
+		"import":     a.importCommand,
+		"archive":    a.archive,
+		"unarchive":  a.unarchive,
 		"destroy":    a.destroy,
 		"migrate":    a.migrate,
 		"version":    a.version,

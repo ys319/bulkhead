@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"text/tabwriter"
 	"time"
@@ -61,7 +63,9 @@ func (a *app) list(ctx context.Context, args []string) error {
 	fmt.Fprintln(table, "NAME\tSTATE\tSSH\tNOTE")
 	for _, env := range cfg.Envs {
 		state := "remote"
-		if env.Local() {
+		if env.Archived != "" {
+			state = "archived"
+		} else if env.Local() {
 			state = "unknown"
 			if runner != nil {
 				status, err := runner.Inspect(ctx, env.ID)
@@ -115,6 +119,18 @@ func (a *app) status(ctx context.Context, args []string) error {
 	if !env.Local() {
 		row("type", "remote")
 		row("ssh", sshAddress(env))
+		return nil
+	}
+
+	if env.Archived != "" {
+		row("state", "archived")
+		path := filepath.Join(store.SnapshotsDir(env.ID), env.Archived)
+		if info, err := os.Stat(path); err != nil {
+			row("snapshot", fmt.Sprintf("%s — MISSING (%v)", path, err))
+		} else {
+			row("snapshot", fmt.Sprintf("%s (%s)", path, tui.HumanBytes(info.Size())))
+		}
+		fmt.Fprintf(a.stdout, "\nbh unarchive %s brings it back.\n", env.Name)
 		return nil
 	}
 

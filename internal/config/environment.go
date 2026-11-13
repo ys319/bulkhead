@@ -33,6 +33,11 @@ type Environment struct {
 	GPU            string   // "off", "legacy" or "cdi"
 	CDIDevices     []string // devices for GPU "cdi"
 	DockerSocket   bool     // opt-in that gives up the boundary for this environment
+	// Archived is set while the environment is put away: the name of the
+	// snapshot, in its snapshot directory, that holds its data. Its
+	// containers and volumes (all but the ssh host identity) are gone
+	// until bh unarchive brings them back from that file.
+	Archived string
 
 	// Remote only.
 	Host string
@@ -57,6 +62,8 @@ var (
 	fingerprintPattern = regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{43}$`)
 	// A fully qualified CDI device name: vendor/class=name.
 	cdiPattern = regexp.MustCompile(`^[A-Za-z](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?/[A-Za-z](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?=[A-Za-z0-9](?:[A-Za-z0-9_.:-]*[A-Za-z0-9])?$`)
+	// A snapshot is a file in the environment's snapshot directory.
+	snapshotNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*\.tar\.gz$`)
 	// The host goes into an ssh config fragment as it is: no whitespace,
 	// quotes or control characters.
 	hostPattern = regexp.MustCompile(`^[^\s"\x00-\x1f\x7f]+$`)
@@ -106,6 +113,9 @@ func (e Environment) validate() error {
 				add("cdiDevices: %q does not look like vendor/class=name (for example nvidia.com/gpu=0)", device)
 			}
 		}
+		if e.Archived != "" && !snapshotNamePattern.MatchString(e.Archived) {
+			add("archived: %q is not the name of a snapshot file", e.Archived)
+		}
 	case TypeRemote:
 		if !hostPattern.MatchString(e.Host) {
 			add("host: takes a hostname or IP address (no spaces, quotes or control characters)")
@@ -134,6 +144,7 @@ type envFile struct {
 	GPU            *string   `json:"gpu"`
 	CDIDevices     *[]string `json:"cdiDevices"`
 	DockerSocket   *bool     `json:"dockerSocket"`
+	Archived       *string   `json:"archived"`
 }
 
 // ParseEnvironment reads the contents of an env.json. The result has no ID:
@@ -193,6 +204,7 @@ func (raw envFile) environment() (Environment, error) {
 		"publish": raw.Publish != nil, "restart": raw.Restart != nil,
 		"authorizedKeys": raw.AuthorizedKeys != nil, "gpu": raw.GPU != nil,
 		"cdiDevices": raw.CDIDevices != nil, "dockerSocket": raw.DockerSocket != nil,
+		"archived": raw.Archived != nil,
 	}
 	switch env.Type {
 	case TypeLocal:
@@ -215,6 +227,9 @@ func (raw envFile) environment() (Environment, error) {
 		if raw.DockerSocket != nil {
 			env.DockerSocket = *raw.DockerSocket
 		}
+		if raw.Archived != nil {
+			env.Archived = *raw.Archived
+		}
 		if raw.Host != nil {
 			misplaced = append(misplaced, "host")
 		}
@@ -224,7 +239,7 @@ func (raw envFile) environment() (Environment, error) {
 		} else {
 			env.Host = *raw.Host
 		}
-		for _, field := range []string{"publish", "restart", "authorizedKeys", "gpu", "cdiDevices", "dockerSocket"} {
+		for _, field := range []string{"publish", "restart", "authorizedKeys", "gpu", "cdiDevices", "dockerSocket", "archived"} {
 			if localOnly[field] {
 				misplaced = append(misplaced, field)
 			}
@@ -260,6 +275,8 @@ type localFile struct {
 	GPU            string   `json:"gpu"`
 	CDIDevices     []string `json:"cdiDevices"`
 	DockerSocket   bool     `json:"dockerSocket"`
+	// Only there while the environment is archived: not a setting to edit.
+	Archived string `json:"archived,omitempty"`
 }
 
 type remoteFile struct {
@@ -283,5 +300,6 @@ func (e Environment) file() any {
 		GPU:            e.GPU,
 		CDIDevices:     append([]string{}, e.CDIDevices...),
 		DockerSocket:   e.DockerSocket,
+		Archived:       e.Archived,
 	}
 }

@@ -290,9 +290,31 @@ func (r Runner) Reset(ctx context.Context, id string) error {
 	return r.removeVolumes(ctx, id, ResetKeys)
 }
 
-// removeVolumes is the one place volumes are removed. Its two callers are
-// the commands whose purpose is to delete data — Destroy and Reset — and
-// nothing else may call it: not migrate, not restart, not a repair.
+// Archive puts the environment away: it removes the containers, the
+// network and every volume but the ssh host identity (plan.ArchiveKeys).
+// The caller has put the data into a snapshot, has read that snapshot back
+// whole, and has recorded it in the settings — in that order, and before
+// this.
+func (r Runner) Archive(ctx context.Context, id string) error {
+	if err := r.Down(ctx, id); err != nil {
+		return err
+	}
+	if err := r.removeContainers(ctx, id); err != nil {
+		return err
+	}
+	if err := r.removeVolumes(ctx, id, plan.ArchiveKeys()); err != nil {
+		return err
+	}
+	if err := r.Engine.RemoveNetwork(ctx, plan.Network(id)); err != nil {
+		return fmt.Errorf("removing the network: %w", err)
+	}
+	return nil
+}
+
+// removeVolumes is the one place volumes are removed. Its callers are the
+// operations whose purpose is to delete data — Destroy, Reset and Archive
+// — and nothing else may call it: not migrate, not restart, not a repair.
+// (A rollback empties volumes without removing them: engine.ReplaceVolume.)
 func (r Runner) removeVolumes(ctx context.Context, id string, keys []string) error {
 	for _, key := range keys {
 		if err := r.Engine.RemoveVolume(ctx, plan.Volume(id, key)); err != nil {

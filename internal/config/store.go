@@ -75,6 +75,15 @@ func (s Store) EnvFile(id string) string { return filepath.Join(s.EnvDir(id), "e
 // DevDockerfile is the optional per-environment extension of the dev image.
 func (s Store) DevDockerfile(id string) string { return filepath.Join(s.EnvDir(id), "dev.Dockerfile") }
 
+// SnapshotsDir holds the snapshots of one environment. It is not inside
+// the environment's own directory: that one is the build context of its
+// dev.Dockerfile, and it goes when the environment is destroyed — the
+// snapshots stay, as the way back from a destroy.
+func (s Store) SnapshotsDir(id string) string { return filepath.Join(s.Dir, "snapshots", id) }
+
+// SnapshotsRoot holds the snapshot directories of all environments.
+func (s Store) SnapshotsRoot() string { return filepath.Join(s.Dir, "snapshots") }
+
 // MachineKey is the private half of the machine's ssh key.
 func (s Store) MachineKey() string { return filepath.Join(s.Dir, "id_ed25519") }
 
