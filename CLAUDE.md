@@ -32,12 +32,14 @@ TS 版は隣の `../bulkhead-ts/`（退避済み。仕様・ADR・脅威モデ�
   ファイルの場所）を作業用の場所へ向ける。`HOME` は変えない — docker context の解決が変わる。
 - **データを消す操作は4つだけ。** ボリュームを消すのは `ops.removeVolumes` の1か所で、呼ぶのは
   `Destroy` / `Reset` / `Archive`（`internal/ops` のテストがソースを数えて確かめている）。
-  ボリュームの中身を入れ替えるのは `engine.ReplaceVolume` で、通るのは `bh rollback` と、
-  作ったばかりのボリュームへ入れる `unarchive` / `import`。どれも確認つきで、rollback と
-  archive は、頼りにするスナップショットを最後まで読み通してから消す（仕様案 §8）。
+  `ops.Reset` は home と nix 以外のボリュームを断る（reset は2段階: 既定は nix だけ、
+  `--home` で home も）。ボリュームの中身を変えるのは `engine.ReplaceVolume`（`bh rollback` と、
+  作ったばかりのボリュームへ入れる `unarchive` / `import`）と `engine.RestoreFromImage`
+  （reset の既定の段階が、home の中の決まったパスをイメージの内容へ戻す）。どれも確認つきで、
+  rollback と archive は、頼りにするスナップショットを最後まで読み通してから消す（仕様案 §8）。
   migrate / undo / restart などほかの経路に足さない。移行の守り事は仕様案 §11。
-- ボリュームを空にするスクリプトをこの環境で走らせるテスト
-  （`internal/engine` の `TestReplaceScriptOnDirectories`）は、既定では動かない
+- ボリュームの中身を消すスクリプトをこの環境で走らせるテスト（`internal/engine` の
+  `TestReplaceScriptOnDirectories` / `TestRestoreScriptOnDirectories`）は、既定では動かない
   （`BH_RUN_REPLACE_SCRIPT=1` を付けたときだけ）。ファイルを消すので、人が承知して動かす。
 - このリポジトリの作業環境には Docker が無いことがある。そのときは偽の Engine のテストまでで
   進め、実機で確かめていないものを仕様案 §13 の一覧に足す（`bh version` で接続を確かめられる）。

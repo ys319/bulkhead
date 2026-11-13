@@ -257,3 +257,80 @@ func TestReplaceScriptOnDirectories(t *testing.T) {
 		}
 	})
 }
+
+func TestRestoreFromImageSpec(t *testing.T) {
+	job := VolumeTar{Image: "dev:1", Volume: "bulkhead-x_home", Target: "/home/developer"}
+	config, host := restoreSpec(job, homeLeftOut)
+	if config.User != "0:0" || len(config.Entrypoint) != 4 || !slices.Equal(config.Entrypoint[:2], []string{"sh", "-c"}) || !slices.Equal(config.Cmd, homeLeftOut) {
+		t.Errorf("config: %+v", config)
+	}
+	if host.NetworkMode != "none" || !slices.Equal(host.CapDrop, []string{"ALL"}) || slices.Contains(host.CapAdd, "SYS_ADMIN") ||
+		!slices.Equal(host.SecurityOpt, []string{"no-new-privileges:true"}) || host.Privileged {
+		t.Errorf("host: %+v", host)
+	}
+	// Beside the image's home directory, not over it: the image's files
+	// are what is copied from.
+	if len(host.Mounts) != 1 || host.Mounts[0].Target != readMount || host.Mounts[0].Source != job.Volume || host.Mounts[0].ReadOnly {
+		t.Errorf("mounts: %+v", host.Mounts)
+	}
+	// The paths are arguments, not text of the script.
+	for _, path := range homeLeftOut {
+		if strings.Contains(config.Entrypoint[2], path) {
+			t.Errorf("%s is written into the script", path)
+		}
+	}
+
+	c := &Client{}
+	for _, path := range []string{"../etc", "/etc", "", "a b", "x; echo y", "."} {
+		if err := c.RestoreFromImage(t.Context(), job, []string{path}); err == nil || !strings.Contains(err.Error(), "not a path inside") {
+			t.Errorf("restoring %q: %v", path, err)
+		}
+	}
+	if err := c.RestoreFromImage(t.Context(), job, nil); err != nil {
+		t.Errorf("nothing to restore: %v", err)
+	}
+}
+
+// The script RestoreFromImage runs, run here on directories the test
+// makes: the paths go back to what "the image" has, the rest stays. Like
+// TestReplaceScriptOnDirectories it deletes files and runs only when asked
+// for (BH_RUN_REPLACE_SCRIPT=1); scripts/verify-features.sh checks the
+// same in a container.
+func TestRestoreScriptOnDirectories(t *testing.T) {
+	if os.Getenv("BH_RUN_REPLACE_SCRIPT") != "1" {
+		t.Skip("deletes files in temporary directories: set BH_RUN_REPLACE_SCRIPT=1 to run it")
+	}
+	needs(t, "sh", "cp")
+	image, volume := t.TempDir(), t.TempDir()
+	tree(t, image, ".local/state/nix/profiles/profile", ".zshrc")
+	if err := os.Symlink(".local/state/nix/profiles/profile", filepath.Join(image, ".nix-profile")); err != nil {
+		t.Fatal(err)
+	}
+	tree(t, volume, ".cache/big", ".local/state/nix/old", ".local/share/keep", ".config/bulkhead/initialized", ".config/keep", ".zshrc")
+	if err := os.Symlink("/nowhere", filepath.Join(volume, ".nix-profile")); err != nil {
+		t.Fatal(err)
+	}
+
+	// The script names the volume by where the container has it.
+	script := strings.ReplaceAll(restoreScript(VolumeTar{Target: image}), readMount, volume)
+	run := exec.Command("sh", append([]string{"-c", script, "sh"}, ".cache", ".nix-profile", ".local/state/nix", ".config/bulkhead/initialized", ".nix-channels")...)
+	if out, err := run.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	want := []string{
+		".config/", ".config/bulkhead/", ".config/keep",
+		".local/", ".local/share/", ".local/share/keep", ".local/state/", ".local/state/nix/", ".local/state/nix/profiles/", ".local/state/nix/profiles/profile",
+		".nix-profile", ".zshrc",
+	}
+	if got := files(t, volume); !slices.Equal(got, want) {
+		t.Errorf("after the restore:\n  got  %v\n  want %v", got, want)
+	}
+	if link, err := os.Readlink(filepath.Join(volume, ".nix-profile")); err != nil || link != ".local/state/nix/profiles/profile" {
+		t.Errorf(".nix-profile: %q %v", link, err)
+	}
+	// The user's own file of the same name as one in the image is not a
+	// path that was named: it stays the user's.
+	if data, _ := os.ReadFile(filepath.Join(volume, ".zshrc")); string(data) != ".zshrc" {
+		t.Errorf(".zshrc = %q", data)
+	}
+}

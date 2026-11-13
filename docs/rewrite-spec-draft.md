@@ -335,17 +335,38 @@ Engine の archive API（`docker cp` 相当）は試作で動いた（2026-11-13
 パスを外す指定が無く、キャッシュを全部読んでから捨てることになり、「外したパスが最初の名前に
 なっているハードリンク」の中身も失うため。
 
+### reset（決定 2026-11-13: 2段階）
+
+「イメージが用意する状態へ戻す」操作。どこまで戻すかを2段階で選ぶ。workspace は対象にしない
+（それは destroy）。
+
+| | 消すもの | 残るもの |
+| --- | --- | --- |
+| `bh reset <env>` — ツール | nix ボリューム。home の中の、スナップショットが外すパス（nix の状態・キャッシュ・`init.sh` の完了印） | workspace、home のデータ |
+| `bh reset <env> --home` | 上に加えて home ボリューム全体 | workspace |
+
+- **ツールの段階は利用者のものを何も失わない。** home の中の nix の状態は「消す」のでは
+  なく、**イメージが持つ内容に戻す**（`engine.RestoreFromImage` — イメージの home から
+  そのパスだけをコピーする）。新しい nix ボリュームに対応するリンクが要るため。先に home 側を
+  戻し、それから nix ボリュームを消す（途中で止まっても、もう一度実行すれば終わる）。
+  次の起動で `init.sh` が走り直す。`archive` → `unarchive` と同じ結果を、workspace を
+  読み書きせずに得る。
+- **`--home` は先に home をスナップショットに取る**（`--no-snapshot` で省く。種類は
+  `before-reset`、中身は home だけ）。`bh rollback` で戻せる。
+- どちらも環境を止める。確認つき（端末でなければ `--yes` が要る）。TUI では Reset が2つの
+  段階を並べ、それぞれが確認する。
+
 ### 消す操作の規則
 
 データを消す操作は4つ。**ボリュームを消す**のは `destroy` / `reset` / `archive`
-（`ops.removeVolumes` の1か所。`internal/ops` のテストが呼び出し元を数える）、**ボリュームの
-中身を入れ替える**のは `rollback`（と、作ったばかりのボリュームへ入れる `unarchive` /
-`import`）で `engine.ReplaceVolume` を通る。どれも確認つきで、消す前に、頼りにする
+（`ops.removeVolumes` の1か所。`internal/ops` のテストが呼び出し元を数える。`ops.Reset` は
+home と nix 以外を渡されると断る）、**ボリュームの中身を変える**のは `rollback`（と、作った
+ばかりのボリュームへ入れる `unarchive` / `import`）の `engine.ReplaceVolume` と、`reset` の
+ツールの段階の `engine.RestoreFromImage`（home の決まったパスだけ）。どれも確認つきで、消す前に、頼りにする
 スナップショットを読み通す。
 
 ### まだ決めていないこと
 
-- `bh reset` の設計し直し（「イメージの状態へのロールバック」として同じ仕組みに載せられる）。
 - home から外すパスを利用者が足せるようにするか（いまは固定の一覧）。
 - 圧縮は gzip の最速。大きな workspace で遅ければ見直す。
 
@@ -666,6 +687,7 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | migrate の追加分 (手) | dev.Dockerfile・トークン・init.sh を持つ TS 版の環境の移行 |
 | Windows (手) | named pipe への接続、`init.sh` の bind（ドライブレターつきのパス。doctor の照合も）、root-shell、TUI |
 | スナップショット (手) | TUI の Snapshot / Roll back / Archive / Unarchive。大きな workspace での所要時間。アーカイブ時の GitHub トークンの失効（本物のトークンで） |
+| reset の2段階 | `scripts/verify-features.sh` の reset の節（書き直した）。ツールの段階: nix ボリュームが消え、home のファイルが残り、キャッシュが消え、新しいストアで nix が動き、`init.sh` が走り直す。`--home`: 先にスナップショットが取られ、home が作り直される。**home の nix の状態をイメージから入れ直すスクリプトは、一度も実機で動いていない** |
 | ラベルの切り替え (手) | 前のビルドで作った環境に `bh up` → コンテナが作り直されて動くこと。それまでは doctor が「今の設定と違う」と warn を出す |
 
 作り直すときに入れる要望（2026-11-13）:

@@ -156,19 +156,37 @@ rm -f "$ENV_DIR/dev.Dockerfile"
 check "without the file, up goes back to the base image" "$BH" up "$NAME"
 check "dev runs from the base" bash -c "docker inspect -f '{{.Config.Image}}' bulkhead-$ID-dev | grep -q '^bulkhead-dev-base:'"
 
-echo "== reset =="
-dev touch /home/developer/.bh-verify-home /home/developer/workspace/.bh-verify-workspace
+echo "== reset: the tools =="
+dev sh -c 'touch /home/developer/.bh-verify-home /home/developer/workspace/.bh-verify-workspace /nix/var/.bh-verify-nix && mkdir -p /home/developer/.cache && echo x > /home/developer/.cache/bh-verify'
 fp_before=$(dev ssh-keygen -lf /etc/bulkhead/hostkeys/ssh_host_ed25519_key.pub | awk '{print $2}')
+inits_before=$(dev sh -c 'wc -l < /home/developer/.bh-verify-init' | tr -d ' ')
 check "reset" "$BH" reset "$NAME" --yes
 check "state is stopped or not created" bash -c "\"$BH\" status $NAME | grep -Eq '^state: *(stopped|not created)'"
+check "the home volume is still there" bash -c "docker volume ls -q | grep -qx 'bulkhead-${ID}_home'"
+check "the workspace volume is still there" bash -c "docker volume ls -q | grep -qx 'bulkhead-${ID}_workspace'"
+refuse "the nix volume is gone" bash -c "docker volume ls -q | grep -qx 'bulkhead-${ID}_nix'"
+check "up after reset" "$BH" up "$NAME"
+check "what was in the home directory is kept" dev test -f /home/developer/.bh-verify-home
+check "the workspace is kept" dev test -f /home/developer/workspace/.bh-verify-workspace
+refuse "the cache is gone" dev test -e /home/developer/.cache/bh-verify
+refuse "the nix store started over" dev test -e /nix/var/.bh-verify-nix
+check "nix works in the fresh store" dev zsh -c 'nix --version && nix eval --expr 1+1'
+check "the nix profile link is the developer's" bash -c "[ \"\$(docker exec bulkhead-$ID-dev stat -c '%u:%g' /home/developer/.nix-profile)\" = '1000:1000' ]"
+check "init.sh ran again" bash -c "[ \"\$(docker exec bulkhead-$ID-dev sh -c 'wc -l < /home/developer/.bh-verify-init' | tr -d ' ')\" = $((inits_before + 1)) ]"
+check "doctor finds nothing wrong after it" "$BH" doctor "$NAME"
+
+echo "== reset: the home directory too =="
+check "reset --home" "$BH" reset "$NAME" --home --yes
+check "the home directory went into a snapshot first" bash -c "ls \"$BH_CONFIG_DIR/snapshots/$ID\" | grep -q 'tar.gz$'"
 check "the workspace volume is still there" bash -c "docker volume ls -q | grep -qx 'bulkhead-${ID}_workspace'"
 refuse "the home volume is gone" bash -c "docker volume ls -q | grep -qx 'bulkhead-${ID}_home'"
 check "up after reset" "$BH" up "$NAME"
 refuse "home starts over" dev test -f /home/developer/.bh-verify-home
 check "the workspace is kept" dev test -f /home/developer/workspace/.bh-verify-workspace
-check "init.sh ran again in the fresh home" bash -c "[ \"\$(docker exec bulkhead-$ID-dev cat /home/developer/.bh-verify-init)\" = run ]"
+check "init.sh ran in the fresh home" bash -c "[ \"\$(docker exec bulkhead-$ID-dev cat /home/developer/.bh-verify-init)\" = run ]"
+check "nix works" dev zsh -c 'nix --version'
 fp_after=$(dev ssh-keygen -lf /etc/bulkhead/hostkeys/ssh_host_ed25519_key.pub | awk '{print $2}')
-if [ -n "$fp_before" ] && [ "$fp_before" = "$fp_after" ]; then ok "ssh host key unchanged by reset"; else ng "ssh host key changed: $fp_before -> $fp_after"; fi
+if [ -n "$fp_before" ] && [ "$fp_before" = "$fp_after" ]; then ok "ssh host key unchanged by the resets"; else ng "ssh host key changed: $fp_before -> $fp_after"; fi
 
 echo "== rename =="
 id_dev=$(docker inspect -f '{{.Id}}' "bulkhead-$ID-dev")
