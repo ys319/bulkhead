@@ -134,6 +134,16 @@ func TestContainerChecks(t *testing.T) {
 		{"init.sh under Docker Desktop's prefix", testEnv, func(in *Environment) {
 			devMount(in, plan.InitScriptTarget).Source = "/host_mnt/home/me/.config/bh/init.sh"
 		}, OK, "dev mounts only the environment's volumes and init.sh", true},
+		// macOS: the configuration directory is under /var/folders, which
+		// is a symbolic link; Docker Desktop reports where it leads.
+		{"init.sh by its real path", testEnv, func(in *Environment) {
+			in.Resolved = map[string]string{"/home/me/.config/bh/init.sh": "/private/home/me/.config/bh/init.sh"}
+			devMount(in, plan.InitScriptTarget).Source = "/host_mnt/private/home/me/.config/bh/init.sh"
+		}, OK, "dev mounts only the environment's volumes and init.sh", true},
+		{"a real path that is not init.sh's", testEnv, func(in *Environment) {
+			in.Resolved = map[string]string{"/home/me/.config/bh/init.sh": "/private/home/me/.config/bh/init.sh"}
+			devMount(in, plan.InitScriptTarget).Source = "/host_mnt/private/etc/shadow"
+		}, Fail, "dev mounts /host_mnt/private/etc/shadow of the host at /etc/bulkhead/init.sh", false},
 		{"the socket where Docker Desktop keeps it", socket, func(in *Environment) {
 			devMount(in, plan.DockerSocketPath).Source = "/run/host-services/docker.proxy.sock"
 		}, OK, "(by opt-in) the Docker socket", false},

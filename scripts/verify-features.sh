@@ -101,21 +101,17 @@ echo "== init.sh =="
 check "ran once at the first boot" bash -c "[ \"\$(docker exec bulkhead-$ID-dev cat /home/developer/.bh-verify-init)\" = run ]"
 refuse "cannot be changed from inside" dev sh -c 'echo x >> /etc/bulkhead/init.sh'
 check "bh init runs it again" "$BH" init "$NAME"
-check "…and it did run" bash -c "[ \"\$(docker exec bulkhead-$ID-dev wc -l < /home/developer/.bh-verify-init | tr -d ' ')\" = 2 ]"
+check "…and it did run" bash -c "[ \"\$(docker exec bulkhead-$ID-dev sh -c 'wc -l < /home/developer/.bh-verify-init' | tr -d ' ')\" = 2 ]"
 
 echo "== token volumes =="
 refuse "github volume is read-only inside" dev sh -c 'echo x > /etc/bulkhead/github/x'
 refuse "tokens volume is read-only inside" dev sh -c 'echo x > /etc/bulkhead/tokens/x'
-if "$BH" token 2>&1 | grep -q 'token set'; then
-  check "token set (value on stdin)" bash -c "printf 'bh-verify-value' | \"$BH\" token set $NAME custom VERIFY_FEATURE_TOKEN"
-  check "a new shell has the variable" bash -c "[ \"\$(docker exec bulkhead-$ID-dev zsh -c 'echo \$VERIFY_FEATURE_TOKEN')\" = bh-verify-value ]"
-  check "the file belongs to the dev user, mode 600" bash -c "[ \"\$(docker exec bulkhead-$ID-dev stat -c '%u %a' /etc/bulkhead/tokens/env)\" = '1000 600' ]"
-  check "token list names it" bash -c "\"$BH\" token list $NAME | grep -q VERIFY_FEATURE_TOKEN"
-  check "token remove" "$BH" token remove "$NAME" VERIFY_FEATURE_TOKEN
-  check "…and a new shell no longer has it" bash -c "[ -z \"\$(docker exec bulkhead-$ID-dev zsh -c 'echo \$VERIFY_FEATURE_TOKEN')\" ]"
-else
-  skip "bh token is not in this build"
-fi
+check "token set (value on stdin)" bash -c "printf 'bh-verify-value' | \"$BH\" token set $NAME custom VERIFY_FEATURE_TOKEN"
+check "a new shell has the variable" bash -c "[ \"\$(docker exec bulkhead-$ID-dev zsh -c 'echo \$VERIFY_FEATURE_TOKEN')\" = bh-verify-value ]"
+check "the file belongs to the dev user, mode 600" bash -c "[ \"\$(docker exec bulkhead-$ID-dev stat -c '%u %a' /etc/bulkhead/tokens/env)\" = '1000 600' ]"
+check "token list names it" bash -c "\"$BH\" token list $NAME | grep -q VERIFY_FEATURE_TOKEN"
+check "token remove" "$BH" token remove "$NAME" VERIFY_FEATURE_TOKEN
+check "…and a new shell no longer has it" bash -c "[ -z \"\$(docker exec bulkhead-$ID-dev zsh -c 'echo \$VERIFY_FEATURE_TOKEN')\" ]"
 skip "bh github set needs a real token: check by hand"
 
 echo "== logs =="
@@ -128,11 +124,7 @@ if wait "$follower"; then ok "following ends cleanly on Ctrl-C"; else ng "follow
 
 echo "== status and doctor =="
 check "status has a disk line" bash -c "\"$BH\" status $NAME | grep -q '^disk: '"
-if "$BH" help | grep -q '^  doctor'; then
-  check "doctor finds nothing wrong with it" "$BH" doctor "$NAME"
-else
-  skip "bh doctor is not in this build"
-fi
+check "doctor finds nothing wrong with it" "$BH" doctor "$NAME"
 
 echo "== ssh =="
 check "login with the machine key" login "$MACHINE_KEY" true

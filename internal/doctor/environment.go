@@ -40,6 +40,11 @@ type Environment struct {
 	// Holder and Dev are the containers as the engine has them; nil when
 	// they do not exist.
 	Holder, Dev *engine.Description
+
+	// Resolved maps a path bh hands to the engine to the same file with its
+	// symbolic links followed, where the two differ. Docker Desktop reports
+	// a bind by the latter: on macOS /var/folders/… is /private/var/folders/….
+	Resolved map[string]string
 }
 
 // CheckLocal checks a local environment: the settings that give up part of
@@ -280,7 +285,7 @@ func checkDev(in Environment, got, want engine.Description) []Finding {
 func checkCommon(in Environment, role string, got, want engine.Description) []Finding {
 	out := checkIsolation(role, got)
 	out = append(out, checkPorts(role, got, want)...)
-	out = append(out, checkMounts(in.Name, role, got, want)...)
+	out = append(out, checkMounts(in, role, got, want)...)
 	out = append(out, checkGPU(in.Name, role, got, want)...)
 	out = append(out, checkRestart(role, got, want)...)
 	return append(out, checkAge(in, role, got, want)...)
@@ -520,8 +525,8 @@ func isDockerSocket(m engine.Mount) bool {
 	return m.Target == plan.DockerSocketPath || strings.HasSuffix(m.Source, "docker.sock")
 }
 
-// sameMount: got is the planned mount.
-func sameMount(got, want engine.Mount) bool {
+// sameMount: got is the planned mount. resolved is Environment.Resolved.
+func sameMount(got, want engine.Mount, resolved map[string]string) bool {
 	if got.Type != want.Type || got.Target != want.Target {
 		return false
 	}
@@ -530,7 +535,11 @@ func sameMount(got, want engine.Mount) bool {
 	}
 	// Where the engine's socket is on its own side is the engine's
 	// business (Docker Desktop reports a path inside its VM).
-	return want.Target == plan.DockerSocketPath || hostPath(got.Source) == hostPath(want.Source)
+	if want.Target == plan.DockerSocketPath || hostPath(got.Source) == hostPath(want.Source) {
+		return true
+	}
+	followed, known := resolved[want.Source]
+	return known && hostPath(got.Source) == hostPath(followed)
 }
 
 // checkMounts: the container sees nothing but what the plan mounts — for
@@ -538,14 +547,15 @@ func sameMount(got, want engine.Mount) bool {
 // A path of the host is the boundary given away (the home directory and
 // the Docker socket are the worst cases, not the only ones); a volume from
 // elsewhere is not the host, so it is a warning.
-func checkMounts(name, role string, got, want engine.Description) []Finding {
+func checkMounts(in Environment, role string, got, want engine.Description) []Finding {
+	name := in.Name
 	var out []Finding
 	found := map[string]bool{}
 	for _, m := range got.Mounts {
 		if m.Type == "tmpfs" {
 			continue // memory of its own, nothing of the host
 		}
-		at := slices.IndexFunc(want.Mounts, func(w engine.Mount) bool { return sameMount(m, w) })
+		at := slices.IndexFunc(want.Mounts, func(w engine.Mount) bool { return sameMount(m, w, in.Resolved) })
 		switch {
 		case at >= 0:
 			found[m.Target] = true

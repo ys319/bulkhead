@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -199,6 +200,10 @@ func environmentFacts(store config.Store, env config.Environment, registry []con
 		keys = append(keys, registered...)
 	}
 	facts.Plan = planEnv(env, keys, store.InitScript())
+	// Docker Desktop reports the bind by the file's real path.
+	if followed, err := filepath.EvalSymlinks(store.InitScript()); err == nil && followed != store.InitScript() {
+		facts.Resolved = map[string]string{store.InitScript(): followed}
+	}
 
 	owner, err := store.Owner()
 	if err != nil {
