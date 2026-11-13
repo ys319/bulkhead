@@ -68,7 +68,10 @@ type Backend interface {
 	Up(ctx context.Context, name string, progress io.Writer) error
 	Down(ctx context.Context, name string) error
 	Restart(ctx context.Context, name string, progress io.Writer) error
-	Reset(ctx context.Context, name string) error
+	// Reset takes the tools back to the image, or with home the home
+	// directory too (kept in a snapshot first). It returns what to tell
+	// the user when it worked.
+	Reset(ctx context.Context, name string, home bool, progress io.Writer) (string, error)
 	Destroy(ctx context.Context, name string) error
 	Configure(ctx context.Context, name string, changes config.Changes) error
 	RunInit(ctx context.Context, name string, progress io.Writer) error

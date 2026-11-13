@@ -351,7 +351,32 @@ func TestResetRemovesHomeAndNixOnly(t *testing.T) {
 	}
 	f.Calls = nil
 
-	if err := r.Reset(context.Background(), env.ID); err != nil {
+	// Only the state of the environment can be reset, never the work.
+	for _, key := range []string{"workspace", "hostkeys", "tokens"} {
+		if err := r.Reset(context.Background(), env.ID, []string{"nix", key}); err == nil {
+			t.Errorf("a reset of %s went ahead", key)
+		}
+	}
+	if len(f.Calls) != 0 {
+		t.Fatalf("a refused reset did something: %v", f.Calls)
+	}
+
+	if err := r.Reset(context.Background(), env.ID, []string{"nix"}); err != nil {
+		t.Fatal(err)
+	}
+	expectCalls(t, f,
+		"stop "+devName, "stop "+holderName,
+		"remove "+devName, "remove "+holderName,
+		"rm-volume bulkhead-e1_nix")
+	if !f.Volumes["bulkhead-e1_home"] {
+		t.Error("a reset of the tools removed the home volume")
+	}
+	if err := r.Up(context.Background(), env, target); err != nil {
+		t.Fatal(err)
+	}
+	f.Calls = nil
+
+	if err := r.Reset(context.Background(), env.ID, ResetKeys); err != nil {
 		t.Fatal(err)
 	}
 	expectCalls(t, f,

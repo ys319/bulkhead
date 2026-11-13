@@ -153,10 +153,14 @@ type snapshotTaken struct {
 }
 
 // takeSnapshot writes the environment's data to path, or into its snapshot
-// directory when path is empty. The caller has checked stoppedLocal.
-func (a *app) takeSnapshot(ctx context.Context, eng dockerEngine, store config.Store, env config.Environment, kind, note, path string) (snapshotTaken, error) {
+// directory when path is empty; only names the volumes to take (nil: all a
+// snapshot holds). The caller has checked stoppedLocal.
+func (a *app) takeSnapshot(ctx context.Context, eng dockerEngine, store config.Store, env config.Environment, kind, note, path string, only []string) (snapshotTaken, error) {
 	var volumes []snapshot.Volume
 	for _, key := range plan.SnapshotKeys {
+		if only != nil && !slices.Contains(only, key) {
+			continue
+		}
 		exists, err := eng.VolumeExists(ctx, plan.Volume(env.ID, key))
 		if err != nil {
 			return snapshotTaken{}, err
@@ -347,7 +351,7 @@ func (a *app) createSnapshot(ctx context.Context, ref, kind, note, path string) 
 	if err := stoppedLocal(ctx, eng, env, "take the snapshot of"); err != nil {
 		return snapshotTaken{}, env, err
 	}
-	taken, err := a.takeSnapshot(ctx, eng, store, env, kind, note, path)
+	taken, err := a.takeSnapshot(ctx, eng, store, env, kind, note, path, nil)
 	return taken, env, err
 }
 
@@ -518,7 +522,7 @@ func (a *app) rollBack(ctx context.Context, store config.Store, planned rollback
 		return "", fmt.Errorf("the snapshot is damaged, nothing was changed: %w", err)
 	}
 	if before {
-		taken, err := a.takeSnapshot(ctx, eng, store, env, snapshot.KindBeforeRollback, "before rolling back to "+strings.TrimSuffix(filepath.Base(planned.Path), snapshot.Extension), "")
+		taken, err := a.takeSnapshot(ctx, eng, store, env, snapshot.KindBeforeRollback, "before rolling back to "+strings.TrimSuffix(filepath.Base(planned.Path), snapshot.Extension), "", nil)
 		if err != nil {
 			return "", fmt.Errorf("could not keep the current data first, nothing was changed: %w", err)
 		}
@@ -661,7 +665,7 @@ func (a *app) archiveEnv(ctx context.Context, ref string) (archived, error) {
 	if err := stoppedLocal(ctx, eng, env, "archive"); err != nil {
 		return result, err
 	}
-	taken, err := a.takeSnapshot(ctx, eng, store, env, snapshot.KindArchive, "", "")
+	taken, err := a.takeSnapshot(ctx, eng, store, env, snapshot.KindArchive, "", "", nil)
 	if err != nil {
 		return result, err
 	}

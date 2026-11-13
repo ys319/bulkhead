@@ -35,6 +35,7 @@ const Format = 1
 const (
 	KindManual         = "manual"
 	KindBeforeRollback = "before-rollback"
+	KindBeforeReset    = "before-reset"
 	KindArchive        = "archive"
 	KindExport         = "export"
 )

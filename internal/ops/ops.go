@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -272,22 +273,30 @@ func (r Runner) Destroy(ctx context.Context, id string) error {
 	return nil
 }
 
-// ResetKeys are the volumes Reset removes: the state of the environment
-// itself. The workspace (the user's work), the ssh host identity and the
-// credentials bh handed in are not among them.
+// ResetKeys are the volumes a reset may remove: the state of the
+// environment itself. The workspace (the user's work), the ssh host
+// identity and the credentials bh handed in are not among them.
 var ResetKeys = []string{"home", "nix"}
 
-// Reset takes the environment back to what the image provides: it removes
-// the containers and the home and nix volumes, and nothing else. The next
-// Up creates them fresh, and init.sh runs again. The caller confirms first.
-func (r Runner) Reset(ctx context.Context, id string) error {
+// Reset takes part of the environment back to what the image provides: it
+// removes the containers and the volumes named by keys — the tool store
+// (nix) alone, or the home directory with it — and nothing else. The next
+// Up creates them fresh. The caller confirms first. A key that is not in
+// ResetKeys is refused: no arrangement of arguments makes this remove the
+// workspace.
+func (r Runner) Reset(ctx context.Context, id string, keys []string) error {
+	for _, key := range keys {
+		if !slices.Contains(ResetKeys, key) {
+			return fmt.Errorf("a reset does not remove the %s volume", key)
+		}
+	}
 	if err := r.Down(ctx, id); err != nil {
 		return err
 	}
 	if err := r.removeContainers(ctx, id); err != nil {
 		return err
 	}
-	return r.removeVolumes(ctx, id, ResetKeys)
+	return r.removeVolumes(ctx, id, keys)
 }
 
 // Archive puts the environment away: it removes the containers, the

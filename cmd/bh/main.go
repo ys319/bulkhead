@@ -53,6 +53,7 @@ type dockerEngine interface {
 	WriteVolume(ctx context.Context, job engine.VolumeJob, input []byte) error
 	ReadVolume(ctx context.Context, job engine.VolumeTar, out io.Writer) error
 	ReplaceVolume(ctx context.Context, job engine.VolumeTar, in io.Reader) error
+	RestoreFromImage(ctx context.Context, job engine.VolumeTar, paths []string) error
 	RunInVolume(ctx context.Context, job engine.VolumeJob) error
 	Describe(ctx context.Context, name string) (*engine.Description, error)
 	Info(ctx context.Context) (engine.Info, error)
@@ -161,7 +162,11 @@ const usageText = `usage: bh [command] [arguments]
                       take a snapshot, then remove containers and volumes;
                       the environment stays in the list
   unarchive <env>     bring an archived environment back
-  reset <env> [--yes] delete home and nix, keep the workspace
+  reset <env> [--home [--no-snapshot]] [--yes]
+                      take the tools back to the image: the nix store and
+                      caches go, init.sh installs again; --home also deletes
+                      the home directory (into a snapshot first). The
+                      workspace is always kept
   destroy <env> [--yes]
                       remove the environment and its data
   migrate [<name>]    take over an environment of the TypeScript version,

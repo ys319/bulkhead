@@ -277,37 +277,3 @@ func TestRootShell(t *testing.T) {
 		t.Errorf("stopped: %s", err)
 	}
 }
-
-func TestResetKeepsTheWorkspace(t *testing.T) {
-	b := newBench(t)
-	b.ok("create", "web")
-	b.ok("up", "web")
-	web := b.env("web")
-
-	// Away from a terminal it does not ask, and does not delete either.
-	if err := b.fails(1, "reset", "web"); !strings.Contains(err, "--yes") {
-		t.Errorf("without --yes: %s", err)
-	}
-	b.typing, b.stdin = true, "n\n"
-	b.fails(1, "reset", "web")
-	for _, key := range plan.AllVolumeKeys() {
-		if !b.engine.Volumes[plan.Volume(web.ID, key)] {
-			t.Fatalf("the %s volume is gone although reset was not confirmed", key)
-		}
-	}
-
-	b.stdin = "y\n"
-	out := b.ok("reset", "web")
-	if !strings.Contains(out, "the workspace is kept") {
-		t.Errorf("output:\n%s", out)
-	}
-	for key, want := range map[string]bool{"home": false, "nix": false, "workspace": true, "hostkeys": true, "github": true, "tokens": true} {
-		if got := b.engine.Volumes[plan.Volume(web.ID, key)]; got != want {
-			t.Errorf("after reset, the %s volume exists = %v, want %v", key, got, want)
-		}
-	}
-	b.ok("up", "web")
-	if !b.engine.Volumes[plan.Volume(web.ID, "home")] {
-		t.Error("up did not create the home volume again")
-	}
-}

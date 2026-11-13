@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -124,8 +123,12 @@ func (b backend) Down(ctx context.Context, name string) error {
 	return b.quiet(io.Discard).down(ctx, []string{name})
 }
 
-func (b backend) Reset(ctx context.Context, name string) error {
-	return b.quiet(io.Discard).reset(ctx, []string{name, "--yes"})
+func (b backend) Reset(ctx context.Context, name string, home bool, progress io.Writer) (string, error) {
+	done, err := b.quiet(progress).resetEnv(ctx, name, home, true)
+	if err != nil {
+		return "", err
+	}
+	return done.report(name) + " — Start runs init.sh again", nil
 }
 
 func (b backend) Destroy(ctx context.Context, name string) error {
@@ -453,44 +456,6 @@ func (b backend) FollowLogs(ctx context.Context, name string, tail int, out io.W
 		return err
 	}
 	return streamLogs(ctx, eng, status, engine.LogOptions{Follow: true, Tail: tail}, out)
-}
-
-// reset takes a local environment back to the image: home and nix go, the
-// workspace stays.
-func (a *app) reset(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("reset", flag.ContinueOnError)
-	yes := flags.Bool("yes", false, "")
-	rest, err := parseFlags(flags, args)
-	if err != nil {
-		return err
-	}
-	if len(rest) != 1 {
-		return usagef("usage: bh reset <env> [--yes]")
-	}
-	_, env, err := a.localEnv("reset", rest[0])
-	if err != nil {
-		return err
-	}
-	if !*yes {
-		if !a.isTerminal() {
-			return fmt.Errorf("reset deletes the home and nix volumes of %q (pass --yes to do it without asking)", env.Name)
-		}
-		question := fmt.Sprintf("Delete the home and nix volumes of %q and start over from the image?\nThe workspace is kept; shell history, tools installed with nix and logins are gone.", env.Name)
-		if !a.confirm(question) {
-			return errAborted
-		}
-	}
-	eng, disconnect, err := a.dial(a.getenv)
-	if err != nil {
-		return err
-	}
-	defer disconnect()
-	if err := (ops.Runner{Engine: eng}).Reset(ctx, env.ID); err != nil {
-		return err
-	}
-	fmt.Fprintf(a.stdout, "Reset %q (home and nix are deleted; the workspace is kept)\n", env.Name)
-	fmt.Fprintf(a.stdout, "The next bh up %s starts from the image again and runs init.sh\n", env.Name)
-	return nil
 }
 
 // pickable are the commands that ask which environment when none is named

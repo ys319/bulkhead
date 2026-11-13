@@ -133,14 +133,8 @@ func (m *Model) envMenu(id, name string) *menu {
 			item{label: "Rename", run: func(m *Model) tea.Cmd { m.push(m.askRename(name)); return nil }})
 		// Reset removes volumes; without containers there is nothing to reset.
 		if state.Known && created(*state) {
-			items = append(items, item{label: "Reset", color: red, run: func(m *Model) tea.Cmd {
-				m.push(&confirm{name: "Reset " + name, color: red,
-					text: []string{"Delete the home and nix volumes and start over from the image?", "The workspace is kept. Everything else in the environment is gone: shell history, tools installed with nix, logins."},
-					onYes: func(m *Model) tea.Cmd {
-						return m.do("Resetting "+name, fmt.Sprintf("%q is reset — Start initializes it again", name), false, func(io.Writer) error {
-							return m.backend.Reset(m.ctx, name)
-						})
-					}})
+			items = append(items, item{label: "Reset", color: yellow, run: func(m *Model) tea.Cmd {
+				m.push(m.resetMenu(name))
 				return nil
 			}})
 		}
@@ -854,4 +848,33 @@ func (m *Model) rollbackMenu(name string) *menu {
 		}
 		return items
 	}}
+}
+
+// resetMenu offers the two steps of a reset, the one that loses nothing of
+// the user's first. Each asks before it does anything.
+func (m *Model) resetMenu(name string) *menu {
+	ask := func(home bool, tone color, text ...string) func(m *Model) tea.Cmd {
+		return func(m *Model) tea.Cmd {
+			m.push(&confirm{name: "Reset " + name, color: tone, text: text,
+				onYes: func(m *Model) tea.Cmd {
+					return m.doThen("Resetting "+name, false, func(progress io.Writer) (string, string, error) {
+						text, err := m.backend.Reset(m.ctx, name, home, progress)
+						return text, "", err
+					})
+				}})
+			return nil
+		}
+	}
+	return &menu{name: "Reset " + name,
+		note: []string{"Take part of the environment back to what the image provides. The workspace is never touched."},
+		build: func(*Model) []item {
+			return []item{
+				{label: "Tools", value: "nix store and caches", color: yellow, run: ask(false, yellow,
+					"Remove the nix store and the caches, and install the tools again?",
+					"The environment is stopped. The workspace and what is in the home directory stay; at the next Start init.sh runs again.")},
+				{label: "Tools and home", value: "everything but the workspace", color: red, run: ask(true, red,
+					"Delete the home directory and the nix store, and start over from the image?",
+					"The environment is stopped. The workspace is kept. Logins, shell history and settings in the home directory are gone — a snapshot of them is taken first.")},
+			}
+		}}
 }

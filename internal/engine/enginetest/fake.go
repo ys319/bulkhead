@@ -59,6 +59,9 @@ type Fake struct {
 	// Data are the files in the volumes: by volume, then by path relative
 	// to its root. ReadVolume reads them and ReplaceVolume replaces them.
 	Data map[string]map[string]string
+	// ImageFiles are the files the images have, by directory and then by
+	// path under it: what RestoreFromImage copies from.
+	ImageFiles map[string]map[string]string
 	// VolumeTars are the volumes that were read or replaced, in order.
 	VolumeTars []engine.VolumeTar
 	// VolumeTarErr makes reading and replacing a volume fail.
@@ -438,4 +441,34 @@ func (f *Fake) ReplaceVolume(_ context.Context, job engine.VolumeTar, in io.Read
 		}
 		kept[strings.TrimPrefix(header.Name, "./")] = string(data)
 	}
+}
+
+// RestoreFromImage does to Data what the script does to the volume: the
+// paths go, and what the image has at them (ImageFiles, by where the
+// volume is mounted) comes in.
+func (f *Fake) RestoreFromImage(_ context.Context, job engine.VolumeTar, paths []string) error {
+	f.log("restore-from-image %s %s", job.Volume, strings.Join(paths, ","))
+	if f.VolumeTarErr != nil {
+		return f.VolumeTarErr
+	}
+	if !f.Volumes[job.Volume] {
+		return fmt.Errorf("the volume %s does not exist", job.Volume)
+	}
+	if f.Data == nil {
+		f.Data = map[string]map[string]string{}
+	}
+	if f.Data[job.Volume] == nil {
+		f.Data[job.Volume] = map[string]string{}
+	}
+	for name := range f.Data[job.Volume] {
+		if leftOut(name, paths) {
+			delete(f.Data[job.Volume], name)
+		}
+	}
+	for name, data := range f.ImageFiles[job.Target] {
+		if leftOut(name, paths) {
+			f.Data[job.Volume][name] = data
+		}
+	}
+	return nil
 }

@@ -104,7 +104,7 @@ var completedCommands = []completedCommand{
 	{name: "import", about: "make a new environment from a snapshot file"},
 	{name: "archive", about: "take a snapshot, then remove containers and volumes", envs: envsLocal, flags: []string{"--yes"}},
 	{name: "unarchive", about: "bring an archived environment back", envs: envsLocal},
-	{name: "reset", about: "delete home and nix, keep the workspace", envs: envsLocal, flags: []string{"--yes"}},
+	{name: "reset", about: "take the tools back to the image, or the home directory too", envs: envsLocal, flags: []string{"--home", "--no-snapshot", "--yes"}},
 	{name: "destroy", about: "remove the environment and its data", envs: envsAll, flags: []string{"--yes"}},
 	{name: "migrate", about: "take over an environment of the TypeScript version", flags: []string{"--yes", "--undo"}},
 	{name: "version", about: "the build, and the Docker Engine bh talks to"},

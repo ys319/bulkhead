@@ -96,7 +96,9 @@ func (f *fake) Down(_ context.Context, name string) error {
 func (f *fake) Restart(_ context.Context, name string, _ io.Writer) error {
 	return f.call("restart %s", name)
 }
-func (f *fake) Reset(_ context.Context, name string) error { return f.call("reset %s", name) }
+func (f *fake) Reset(_ context.Context, name string, home bool, _ io.Writer) (string, error) {
+	return "reset done", f.call("reset %s home=%v", name, home)
+}
 func (f *fake) Snapshot(_ context.Context, name string, _ io.Writer) (string, error) {
 	return "2026-11-13T090000Z", f.call("snapshot %s", name)
 }
@@ -552,12 +554,26 @@ func TestRebootAndResetAsk(t *testing.T) {
 	s.pick("Reboot").press("right", "enter")
 	s.called("restart web")
 
-	s.press("enter").pick("Reset").press("esc")
-	if slices.Contains(s.backend.calls, "reset web") {
+	// Reset offers its two steps, the one that loses nothing first; each
+	// asks, and No is where the cursor starts.
+	s.press("enter").pick("Reset")
+	if got, want := s.labels(), []string{"Tools", "Tools and home"}; !slices.Equal(got, want) {
+		t.Fatalf("reset: %q", got)
+	}
+	s.pick("Tools")
+	s.shows("The workspace and what is in the home directory stay")
+	s.press("enter")
+	if slices.ContainsFunc(s.backend.calls, func(call string) bool { return strings.HasPrefix(call, "reset") }) {
 		t.Error("reset ran without a yes")
 	}
-	s.pick("Reset").press("left", "enter")
-	s.called("reset web")
+	s.pick("Tools").press("right", "enter")
+	s.called("reset web home=false")
+	s.shows("reset done")
+
+	s.onto("web").press("enter").pick("Reset").pick("Tools and home")
+	s.shows("a snapshot of them is taken first")
+	s.press("right", "enter")
+	s.called("reset web home=true")
 }
 
 func TestDestroyWantsTheNameTyped(t *testing.T) {

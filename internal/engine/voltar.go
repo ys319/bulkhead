@@ -166,6 +166,61 @@ func (c *Client) ReplaceVolume(ctx context.Context, job VolumeTar, in io.Reader)
 	return c.runStreaming(ctx, config, host, in, io.Discard)
 }
 
+// restoreScript puts paths of the volume back to what the image has. The
+// volume is at readMount, the image's own files are where they always are
+// (job.Target), and the paths come as arguments. Each one is removed from
+// the volume and, when the image has it, copied over — with the
+// directories on the way, which get the image's owners when they have to
+// be made (cp --parents).
+func restoreScript(job VolumeTar) string {
+	return strings.Join([]string{
+		"set -eu",
+		"[ -d '" + readMount + "' ] && [ -d '" + job.Target + "' ] || { echo \"the volume or the image's directory is not there: nothing was removed\" >&2; exit 1; }",
+		"cd '" + job.Target + "'",
+		`for path in "$@"; do`,
+		`  [ -n "$path" ] || exit 1`,
+		`  rm -rf -- "` + readMount + `/$path"`,
+		`  if [ -e "$path" ] || [ -L "$path" ]; then`,
+		`    cp -a --parents -- "$path" '` + readMount + `/'`,
+		`  fi`,
+		`done`,
+	}, "\n")
+}
+
+// restoreSpec is the container RestoreFromImage runs: the volume beside
+// the image's files instead of over them, the paths as arguments.
+func restoreSpec(job VolumeTar, paths []string) (*container.Config, *container.HostConfig) {
+	return &container.Config{
+			Image: job.Image, User: "0:0",
+			Entrypoint: []string{"sh", "-c", restoreScript(job), "sh"}, Cmd: paths,
+		}, &container.HostConfig{
+			NetworkMode: "none",
+			CapDrop:     []string{"ALL"},
+			CapAdd:      []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID"},
+			SecurityOpt: []string{"no-new-privileges:true"},
+			Mounts:      []mount.Mount{{Type: mount.TypeVolume, Source: job.Volume, Target: readMount}},
+		}
+}
+
+// RestoreFromImage takes the paths of the volume (relative to its root)
+// back to what the image has at job.Target, where dev mounts the volume:
+// what the image has there is copied in, what it does not have is gone.
+// The rest of the volume is not touched. It deletes data under the paths.
+func (c *Client) RestoreFromImage(ctx context.Context, job VolumeTar, paths []string) error {
+	job.LeftOut = paths // checked as paths inside the volume
+	if err := job.check(); err != nil {
+		return err
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	if !strings.HasPrefix(job.Target, "/") || strings.Trim(job.Target, "/") == "" || strings.ContainsAny(job.Target, `'"\ `) {
+		return fmt.Errorf("%q is not a place to mount a volume", job.Target)
+	}
+	config, host := restoreSpec(job, paths)
+	return c.runStreaming(ctx, config, host, nil, io.Discard)
+}
+
 // runStreaming runs a short-lived container whose standard input comes
 // from in (nil: none) and whose standard output goes to out, as they come.
 // What it writes to standard error is the error's text when it fails.
