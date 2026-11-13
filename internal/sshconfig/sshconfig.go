@@ -53,9 +53,18 @@ func KnownHosts(configPath string) string {
 // this name keep finding it.
 func Alias(name string) string { return "bulkhead-" + name }
 
+// HostKeyAlias is the name the ssh client files an environment's host key
+// under in known_hosts, instead of address and port. The id never changes
+// and is never used twice, and the host key lives in a volume of the
+// environment: one name, one key. By address and port, a new environment
+// on a port that another one had (or a second machine's environment
+// forwarded to the same local port) looks like an attack on the first.
+func HostKeyAlias(id string) string { return "bh-" + id }
+
 // Host is one environment as the ssh client reaches it.
 type Host struct {
 	Name     string // the environment's name
+	ID       string // the environment's id
 	HostName string
 	Port     int
 }
@@ -78,6 +87,7 @@ func Fragment(identity string, hosts []Host) string {
 			`  IdentityFile "`+identity+`"`,
 			"  StrictHostKeyChecking accept-new",
 			"  IdentitiesOnly yes",
+			"  HostKeyAlias "+HostKeyAlias(host.ID),
 		)
 	}
 	return strings.Join(lines, "\n") + "\n"

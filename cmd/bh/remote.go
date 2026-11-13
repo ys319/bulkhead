@@ -98,6 +98,8 @@ func (a *app) removeRemote(ref string) (config.Environment, error) {
 	if err := store.RemoveEnvironment(env.ID); err != nil {
 		return env, err
 	}
+	// The key of the other machine's environment, as this entry knew it.
+	a.forgetHostKey(env.ID, 0)
 	a.syncSSH(store)
 	return env, nil
 }

@@ -574,8 +574,8 @@ func (a *app) destroy(ctx context.Context, args []string) error {
 	if err := store.RemoveEnvironment(id); err != nil {
 		return err
 	}
-	if local && port != 0 {
-		a.forgetHostKey(port)
+	if local {
+		a.forgetHostKey(id, port)
 	}
 	a.syncSSH(store)
 	fmt.Fprintf(a.stdout, "Destroyed %q\n", name)

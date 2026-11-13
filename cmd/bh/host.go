@@ -87,16 +87,17 @@ func sshHosts(cfg *config.Config) []sshconfig.Host {
 		if !env.Local() {
 			host = env.Host
 		}
-		hosts = append(hosts, sshconfig.Host{Name: env.Name, HostName: host, Port: env.SSHPort})
+		hosts = append(hosts, sshconfig.Host{Name: env.Name, ID: env.ID, HostName: host, Port: env.SSHPort})
 	}
 	return hosts
 }
 
-// forgetHostKey drops the environment's entry from known_hosts. Only
-// destroying an environment calls for it: that is when its ssh host key
-// goes, and the next environment on the same port would look like an
-// attack to the ssh client. Nothing to forget is not a problem.
-func (a *app) forgetHostKey(port int) {
+// forgetHostKey drops the environment's entries from known_hosts: the one
+// under its own name (sshconfig.HostKeyAlias) and, for a local environment
+// (port != 0), the one by address and port that earlier versions of bh and
+// a plain `ssh -p` leave. Only destroying an environment calls for it: that
+// is when its ssh host key goes. Nothing to forget is not a problem.
+func (a *app) forgetHostKey(id string, port int) {
 	path, err := a.sshConfigPath()
 	if err != nil {
 		return
@@ -107,7 +108,10 @@ func (a *app) forgetHostKey(port int) {
 	}
 	// The file is named: ssh-keygen's own default comes from the password
 	// database, not from HOME.
-	_, _ = a.tool("ssh-keygen", []string{"-R", fmt.Sprintf("[127.0.0.1]:%d", port), "-f", knownHosts})
+	_, _ = a.tool("ssh-keygen", []string{"-R", sshconfig.HostKeyAlias(id), "-f", knownHosts})
+	if port != 0 {
+		_, _ = a.tool("ssh-keygen", []string{"-R", fmt.Sprintf("[127.0.0.1]:%d", port), "-f", knownHosts})
+	}
 }
 
 // inspect asks the engine about a local environment's containers.

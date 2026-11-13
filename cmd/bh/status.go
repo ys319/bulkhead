@@ -10,6 +10,7 @@ import (
 	"github.com/ys319/bulkhead/internal/config"
 	"github.com/ys319/bulkhead/internal/engine"
 	"github.com/ys319/bulkhead/internal/ops"
+	"github.com/ys319/bulkhead/internal/sshconfig"
 	"github.com/ys319/bulkhead/internal/tui"
 )
 
@@ -214,7 +215,8 @@ func (a *app) path(_ context.Context, args []string) error {
 // sshArgs are the arguments of the ssh client for the environment: the same
 // terms as its entry in the ssh configuration. IdentitiesOnly keeps an
 // agent full of keys from using up the server's tries before the machine
-// key gets its turn.
+// key gets its turn; HostKeyAlias files the host key under the environment
+// instead of under its port.
 func sshArgs(store config.Store, env config.Environment, options ...string) []string {
 	host := env.Host
 	if env.Local() {
@@ -225,6 +227,7 @@ func sshArgs(store config.Store, env config.Environment, options ...string) []st
 		"-p", strconv.Itoa(env.SSHPort),
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "IdentitiesOnly=yes",
+		"-o", "HostKeyAlias=" + sshconfig.HostKeyAlias(env.ID),
 	}
 	for _, option := range options {
 		args = append(args, "-o", option)

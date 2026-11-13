@@ -325,9 +325,12 @@ func TestDestroyForgetsTheHostKeyAndTheSSHEntry(t *testing.T) {
 	if err := os.WriteFile(knownHosts, []byte("[127.0.0.1]:23001 ssh-ed25519 AAAA\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	id := b.env("web").ID
 	b.ok("destroy", "web", "--yes")
-	if !slices.Contains(b.tools, "ssh-keygen -R [127.0.0.1]:23001 -f "+knownHosts) {
-		t.Errorf("tools = %v", b.tools)
+	for _, entry := range []string{"bh-" + id, "[127.0.0.1]:23001"} {
+		if !slices.Contains(b.tools, "ssh-keygen -R "+entry+" -f "+knownHosts) {
+			t.Errorf("%s was not forgotten: tools = %v", entry, b.tools)
+		}
 	}
 	if strings.Contains(b.sshFragment(), "bulkhead-web") {
 		t.Errorf("the ssh entry stayed:\n%s", b.sshFragment())

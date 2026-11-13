@@ -376,6 +376,7 @@ func TestSSH(t *testing.T) {
 	want := []string{
 		"-i", filepath.Join(b.dir, "id_ed25519"), "-p", "22001",
 		"-o", "StrictHostKeyChecking=accept-new", "-o", "IdentitiesOnly=yes",
+		"-o", "HostKeyAlias=bh-" + b.env("web").ID,
 		"developer@127.0.0.1", "uname", "-a",
 	}
 	if !slices.Equal(b.sshArgs, want) {
