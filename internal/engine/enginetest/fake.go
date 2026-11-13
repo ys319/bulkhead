@@ -3,9 +3,12 @@
 package enginetest
 
 import (
+	"archive/tar"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -53,6 +56,13 @@ type Fake struct {
 	VolumeRuns []VolumeRun
 	// VolumeJobErr makes running a script on a volume fail.
 	VolumeJobErr error
+	// Data are the files in the volumes: by volume, then by path relative
+	// to its root. ReadVolume reads them and ReplaceVolume replaces them.
+	Data map[string]map[string]string
+	// VolumeTars are the volumes that were read or replaced, in order.
+	VolumeTars []engine.VolumeTar
+	// VolumeTarErr makes reading and replacing a volume fail.
+	VolumeTarErr error
 	// EngineInfo is what Info reports (zero: a stock answer); InfoErr makes
 	// the engine one that does not answer.
 	EngineInfo engine.Info
@@ -207,6 +217,7 @@ func (f *Fake) RemoveContainer(_ context.Context, id string) error {
 func (f *Fake) RemoveVolume(_ context.Context, name string) error {
 	f.log("rm-volume %s", name)
 	delete(f.Volumes, name)
+	delete(f.Data, name)
 	return nil
 }
 
@@ -340,4 +351,91 @@ func (f *Fake) Info(context.Context) (engine.Info, error) {
 		return engine.Info{Version: "29.0.0", APIVersion: "1.52", OS: "linux", Arch: "amd64", Builder: "2"}, nil
 	}
 	return f.EngineInfo, nil
+}
+
+// leftOut reports whether name is one of the paths, or under one.
+func leftOut(name string, paths []string) bool {
+	for _, left := range paths {
+		if name == left || strings.HasPrefix(name, left+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// ReadVolume writes the files of the volume (Data) as a tar stream, as tar
+// does in the container: the root first, names in order, left-out paths
+// not at all.
+func (f *Fake) ReadVolume(_ context.Context, job engine.VolumeTar, out io.Writer) error {
+	f.log("read-volume %s", job.Volume)
+	if f.VolumeTarErr != nil {
+		return f.VolumeTarErr
+	}
+	if !f.Volumes[job.Volume] {
+		return fmt.Errorf("the volume %s does not exist", job.Volume)
+	}
+	f.VolumeTars = append(f.VolumeTars, job)
+	w := tar.NewWriter(out)
+	if err := w.WriteHeader(&tar.Header{Name: "./", Typeflag: tar.TypeDir, Mode: 0o755, Uid: 1000, Gid: 1000}); err != nil {
+		return err
+	}
+	names := make([]string, 0, len(f.Data[job.Volume]))
+	for name := range f.Data[job.Volume] {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if leftOut(name, job.LeftOut) {
+			continue
+		}
+		data := f.Data[job.Volume][name]
+		if err := w.WriteHeader(&tar.Header{Name: "./" + name, Typeflag: tar.TypeReg, Mode: 0o644, Uid: 1000, Gid: 1000, Size: int64(len(data))}); err != nil {
+			return err
+		}
+		if _, err := w.Write([]byte(data)); err != nil {
+			return err
+		}
+	}
+	return w.Close()
+}
+
+// ReplaceVolume does to Data what the script does to the volume: every
+// file goes except the left-out ones, then the stream's files come in.
+func (f *Fake) ReplaceVolume(_ context.Context, job engine.VolumeTar, in io.Reader) error {
+	f.log("replace-volume %s", job.Volume)
+	if f.VolumeTarErr != nil {
+		return f.VolumeTarErr
+	}
+	if !f.Volumes[job.Volume] {
+		return fmt.Errorf("the volume %s does not exist", job.Volume)
+	}
+	f.VolumeTars = append(f.VolumeTars, job)
+	if f.Data == nil {
+		f.Data = map[string]map[string]string{}
+	}
+	kept := map[string]string{}
+	for name, data := range f.Data[job.Volume] {
+		if leftOut(name, job.LeftOut) {
+			kept[name] = data
+		}
+	}
+	f.Data[job.Volume] = kept
+	r := tar.NewReader(in)
+	for {
+		header, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		kept[strings.TrimPrefix(header.Name, "./")] = string(data)
+	}
 }
