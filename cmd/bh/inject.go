@@ -37,6 +37,17 @@ func tokenHolder(store config.Store, ref string) (config.Environment, error) {
 	return env, nil
 }
 
+// tokenTarget is tokenHolder for giving the environment a token or taking
+// one out of it: that writes into its volumes, which an archived
+// environment does not have.
+func tokenTarget(store config.Store, ref string) (config.Environment, error) {
+	env, err := tokenHolder(store, ref)
+	if err == nil && env.Archived != "" {
+		err = archivedError(env)
+	}
+	return env, err
+}
+
 // volumeWriter changes the token volumes of one environment.
 type volumeWriter struct {
 	eng   dockerEngine

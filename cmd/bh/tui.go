@@ -638,9 +638,19 @@ func (b backend) Rollback(ctx context.Context, name, snapshotName string, progre
 	return strings.TrimSuffix(kept, snapshot.Extension), err
 }
 
-func (b backend) Archive(ctx context.Context, name string, progress io.Writer) error {
-	_, _, err := b.quiet(progress).archiveEnv(ctx, name)
-	return err
+func (b backend) Archive(ctx context.Context, name string, progress io.Writer) (string, error) {
+	result, err := b.quiet(progress).archiveEnv(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	text := fmt.Sprintf("%q is archived", name)
+	if result.TokenRevoked {
+		text += " and its GitHub token revoked"
+	}
+	if len(result.Warnings) > 0 {
+		text += " — but: " + strings.Join(result.Warnings, "; ")
+	}
+	return text, nil
 }
 
 func (b backend) Unarchive(ctx context.Context, name string, progress io.Writer) error {

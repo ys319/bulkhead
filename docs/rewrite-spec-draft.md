@@ -92,7 +92,10 @@ Go の `os/exec` は 1.19 以降、カレントディレクトリへ解決され
 | ボリューム | `bulkhead-<id>_{workspace,home,nix,hostkeys,inject}` | 区切りは TS 版（compose 既定）と同じ `_`。引き継ぎのため変えない |
 | イメージ | `bulkhead-holder:<資産ハッシュ>` / `bulkhead-dev-base:<資産ハッシュ>` / `bulkhead-<id>-dev:<ハッシュ>` | holder も共有にする（TS 版は環境ごとに同じものを作っていた） |
 
-**ラベル**（新しく作る資源すべてに付ける。名前空間は未決 — §12）:
+**ラベル**（新しく作る資源すべてに付ける。接頭辞は `io.github.ys319.bulkhead.` — 決定
+2026-11-13。それより前のビルドは `bulkhead.` で付けていた。コンテナは次の `bh up` で作り直されて
+新しいラベルになるが、ボリュームとネットワークは作られたときのラベルのまま残るので、ラベルを
+読むもの（`prune`）は両方の接頭辞と、TS 版から来たボリュームの compose のラベルを扱う）:
 
 - `owner=<設定ディレクトリの ID>` — 同じデーモンを複数の設定ディレクトリが共有しても所有を
   判定できる（[ADR 0039](../../bulkhead-ts/docs/decisions/0039-remove-prune.md) の再導入条件）。
@@ -308,6 +311,11 @@ complete.json          各ボリュームのエントリ数とバイト数。最
   `bh unarchive` を案内する。アーカイブ先のスナップショットは `snapshot remove` で消せない。
   doctor はコンテナの代わりにそのファイルを見る（無ければ fail）。hostkeys のボリュームと
   ポートの割り当ては残るので、戻ったときに ssh の識別が変わらない。
+- **アーカイブは GitHub トークンを失効させる**（決定 2026-11-13 — 眠っている環境に、使える
+  資格情報を持たせない）。Docker 側を消した後で失効させ、記録も消す。GitHub が応じなければ
+  記録を残して警告し、`bh github revoke` でやり直せる。アーカイブ中は `bh github set` /
+  `bh token set` / `remove` を断る（入れ先のボリュームが無い）。ほかのトークン（Hugging Face
+  など）は記録に残り、戻した後の `bh up` でボリュームへ入る。
 - TUI: Maintenance に Snapshot / Roll back / Archive、アーカイブ中の環境には Unarchive。
 
 ### 読み書きの方式（`internal/engine` の `ReadVolume` / `ReplaceVolume`）
@@ -338,7 +346,6 @@ Engine の archive API（`docker cp` 相当）は試作で動いた（2026-11-13
 ### まだ決めていないこと
 
 - `bh reset` の設計し直し（「イメージの状態へのロールバック」として同じ仕組みに載せられる）。
-- アーカイブのときに GitHub トークンを失効させるか（トークンまわりの再設計と一緒に）。
 - home から外すパスを利用者が足せるようにするか（いまは固定の一覧）。
 - 圧縮は gzip の最速。大きな workspace で遅ければ見直す。
 
@@ -491,8 +498,8 @@ Bubble Tea。docker context の解決順は実測して実装済み（§2）。
 
 - **2. ビルドの経路**: (a) のまま。buildx が使えるなら使いたいが、複雑なビルドではないので
   素の `docker build` で多少遅い程度なら構わない（いまの docker CLI は既定で BuildKit を使う）。
-- **4. ラベルの名前空間**: 使う（逆 DNS 形式）。接頭辞の文字列はまだ決めていない — ボリュームの
-  ラベルは後から変えられないので、`prune` を入れる前に決めて切り替える。
+- **4. ラベルの名前空間**: 使う（逆 DNS 形式）。接頭辞は `io.github.ys319.bulkhead.`
+  （実装済み — §3）。
 - **5. 併存中のコマンド名**: 当面は配布物の名前（`bh-<os>-<arch>`）のまま使い、移行が済んだら
   `bh` として置く。
 - **7. 依存の更新の待機**: 1週間を目安にする。Socket は GitHub Actions を組むときに入れる。
@@ -635,6 +642,12 @@ exec の端末接続が Windows 固有の不確定要素）。
   - 値つきの行があるメニュー（Runtime など）が画面いっぱいに広がった。
   - スクリプト側の間違い2つ（`bh init` の再実行の行数の読み方、トークンの検査が飛ばされる）。
 
+**スナップショット（同日、`0efabc9` のビルド）: `scripts/verify-snapshots.sh` が 77 項目通過・
+失敗 0。** snapshot / rollback（全体と片方）/ export・import / archive・unarchive。所有者・
+モード・ハードリンク・切れたリンクが戻ること、外したパスに触らないこと、新しいボリュームで nix が
+動いて `init.sh` が走り直すこと、ssh のホスト鍵が変わらないことを含む。ボリュームを空にする
+スクリプトが実際に走ったのはこれが最初。
+
 **修正後の再実行（同日、`07c050d` のビルド）: 55 項目通過・失敗 0**（飛ばしたのは手で見る
 `bh github set` だけ）。境界は 54 項目すべて通過。これで初めて通ったもの: 起動直後の環境で
 doctor が何も出さない / `bh token set` が新しいシェルに届き `remove` で消える（所有者 uid 1000・
@@ -652,8 +665,8 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | events (手) | TUI を開いたまま別の端末で `bh up` / `bh down` → 一覧が追従する |
 | migrate の追加分 (手) | dev.Dockerfile・トークン・init.sh を持つ TS 版の環境の移行 |
 | Windows (手) | named pipe への接続、`init.sh` の bind（ドライブレターつきのパス。doctor の照合も）、root-shell、TUI |
-| スナップショット | `scripts/verify-snapshots.sh <bh>` — snapshot / rollback / export・import / archive・unarchive。**一度も実機で動いていない。** 特に: tar の読み書き（所有者・モード・リンク）、外したパスが残ること、新しいボリュームにイメージの home が入ってから展開されること、戻した後に nix が動いて init.sh が走り直すこと、ボリュームを空にするスクリプト（ここのテストでは既定で走らせていない） |
-| スナップショット (手) | TUI の Snapshot / Roll back / Archive / Unarchive。大きな workspace での所要時間 |
+| スナップショット (手) | TUI の Snapshot / Roll back / Archive / Unarchive。大きな workspace での所要時間。アーカイブ時の GitHub トークンの失効（本物のトークンで） |
+| ラベルの切り替え (手) | 前のビルドで作った環境に `bh up` → コンテナが作り直されて動くこと。それまでは doctor が「今の設定と違う」と warn を出す |
 
 作り直すときに入れる要望（2026-11-13）:
 

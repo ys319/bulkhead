@@ -258,10 +258,11 @@ func (m *Model) maintenanceMenu(id, name string) *menu {
 				}},
 				item{label: "Archive", color: yellow, disabled: busy, run: func(m *Model) tea.Cmd {
 					m.push(&confirm{name: "Archive " + name, color: yellow,
-						text: []string{"Take a snapshot, then remove the containers and volumes?", "The environment stays in the list. Unarchive brings the workspace and the home directory back; the nix store and caches do not come back — init.sh installs the tools again."},
+						text: []string{"Take a snapshot, then remove the containers and volumes?", "The environment stays in the list. Unarchive brings the workspace and the home directory back; the nix store and caches do not come back — init.sh installs the tools again. A GitHub token of the environment is revoked."},
 						onYes: func(m *Model) tea.Cmd {
-							return m.do("Archiving "+name, fmt.Sprintf("%q is archived", name), false, func(progress io.Writer) error {
-								return m.backend.Archive(m.ctx, name, progress)
+							return m.doThen("Archiving "+name, false, func(progress io.Writer) (string, string, error) {
+								text, err := m.backend.Archive(m.ctx, name, progress)
+								return text, "", err
 							})
 						}})
 					return nil

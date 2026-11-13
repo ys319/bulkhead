@@ -112,7 +112,9 @@ type Backend interface {
 	Snapshot(ctx context.Context, name string, progress io.Writer) (string, error)
 	Snapshots(name string) ([]SnapshotEntry, error)
 	Rollback(ctx context.Context, name, snapshot string, progress io.Writer) (string, error)
-	Archive(ctx context.Context, name string, progress io.Writer) error
+	// Archive returns what to tell the user when it worked: that, and
+	// what was left to do by hand.
+	Archive(ctx context.Context, name string, progress io.Writer) (string, error)
 	Unarchive(ctx context.Context, name string, progress io.Writer) error
 
 	// Programs that take the terminal over until they end.

@@ -630,44 +630,64 @@ func (a *app) importCommand(ctx context.Context, args []string) error {
 	return nil
 }
 
+// archived is what putting an environment away came to.
+type archived struct {
+	Env   config.Environment
+	Taken snapshotTaken
+	// TokenRevoked: it had a GitHub token, which is revoked now.
+	TokenRevoked bool
+	// Warnings are what is left to do by hand.
+	Warnings []string
+}
+
 // archiveEnv puts the environment away: a snapshot, read back whole, and
-// only then the containers and volumes go.
-func (a *app) archiveEnv(ctx context.Context, ref string) (config.Environment, snapshotTaken, error) {
+// only then the containers and volumes go — and after them its GitHub
+// token, which an environment that is asleep has no use for.
+func (a *app) archiveEnv(ctx context.Context, ref string) (archived, error) {
 	store, cfg, err := a.load()
 	if err != nil {
-		return config.Environment{}, snapshotTaken{}, err
+		return archived{}, err
 	}
 	env, err := cfg.Find(ref)
 	if err != nil {
-		return env, snapshotTaken{}, err
+		return archived{}, err
 	}
+	result := archived{Env: env}
 	eng, disconnect, err := a.dial(a.getenv)
 	if err != nil {
-		return env, snapshotTaken{}, err
+		return result, err
 	}
 	defer disconnect()
 	if err := stoppedLocal(ctx, eng, env, "archive"); err != nil {
-		return env, snapshotTaken{}, err
+		return result, err
 	}
 	taken, err := a.takeSnapshot(ctx, eng, store, env, snapshot.KindArchive, "", "")
 	if err != nil {
-		return env, taken, err
+		return result, err
 	}
+	result.Taken = taken
 	// The file is all there will be of the data: read it back before the
 	// volumes go.
 	fmt.Fprintln(a.stderr, "Checking the snapshot...")
 	if _, err := snapshot.Verify(taken.Path); err != nil {
-		return env, taken, fmt.Errorf("the snapshot did not read back, nothing was removed: %w", err)
+		return result, fmt.Errorf("the snapshot did not read back, nothing was removed: %w", err)
 	}
 	env.Archived = filepath.Base(taken.Path)
 	if err := store.SaveEnvironment(env); err != nil {
-		return env, taken, err
+		return result, err
 	}
+	result.Env = env
 	if err := (ops.Runner{Engine: eng}).Archive(ctx, env.ID); err != nil {
-		return env, taken, fmt.Errorf("the snapshot is taken and %q is marked archived, but removing its containers and volumes failed: %w\n(bh unarchive %s puts it back as it was)", env.Name, err, env.Name)
+		return result, fmt.Errorf("the snapshot is taken and %q is marked archived, but removing its containers and volumes failed: %w\n(bh unarchive %s puts it back as it was)", env.Name, err, env.Name)
+	}
+	// After Docker's part, as with destroy: had that failed, the
+	// environment would still be there to use, and its token with it.
+	var warning string
+	if result.TokenRevoked, warning = a.revokeForArchive(ctx, store, env); warning != "" {
+		result.Warnings = append(result.Warnings, warning)
 	}
 	a.syncSSH(store)
-	return env, taken, nil
+	return result, nil
 }
 
 func (a *app) archive(ctx context.Context, args []string) error {
@@ -683,16 +703,22 @@ func (a *app) archive(ctx context.Context, args []string) error {
 	if !*yes {
 		fmt.Fprintf(a.stderr, "This takes a snapshot of %q and then removes its containers and volumes.\n", words[0])
 		fmt.Fprintln(a.stderr, "The workspace and the home directory come back with bh unarchive; the nix store")
-		fmt.Fprintln(a.stderr, "and caches do not — init.sh installs the tools again.")
+		fmt.Fprintln(a.stderr, "and caches do not — init.sh installs the tools again. A GitHub token of the")
+		fmt.Fprintln(a.stderr, "environment is revoked.")
 		if !a.confirm("Archive?") {
 			return errAborted
 		}
 	}
-	env, taken, err := a.archiveEnv(ctx, words[0])
+	result, err := a.archiveEnv(ctx, words[0])
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "Archived %q in %s (%s). bh unarchive %s brings it back.\n", env.Name, taken.Path, tui.HumanBytes(taken.Size), env.Name)
+	name := result.Env.Name
+	fmt.Fprintf(a.stdout, "Archived %q in %s (%s). bh unarchive %s brings it back.\n", name, result.Taken.Path, tui.HumanBytes(result.Taken.Size), name)
+	if result.TokenRevoked {
+		fmt.Fprintf(a.stdout, "Its GitHub token is revoked (bh github set %s after bh unarchive gives it a new one).\n", name)
+	}
+	a.warn(result.Warnings)
 	return nil
 }
 

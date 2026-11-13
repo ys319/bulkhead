@@ -57,7 +57,7 @@ func (a *app) setToken(ctx context.Context, ref, kind, name, value string) (toke
 	if err != nil {
 		return tokenSetResult{}, err
 	}
-	env, err := tokenHolder(store, ref)
+	env, err := tokenTarget(store, ref)
 	if err != nil {
 		return tokenSetResult{}, err
 	}
@@ -115,7 +115,7 @@ func (a *app) removeToken(ctx context.Context, ref, name string) (tokenRemoveRes
 	if err != nil {
 		return tokenRemoveResult{}, err
 	}
-	env, err := tokenHolder(store, ref)
+	env, err := tokenTarget(store, ref)
 	if err != nil {
 		return tokenRemoveResult{}, err
 	}
@@ -289,7 +289,7 @@ func (a *app) tokenSet(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	env, err := tokenHolder(store, words[0])
+	env, err := tokenTarget(store, words[0])
 	if err != nil {
 		return err
 	}

@@ -104,9 +104,9 @@ func (f *fake) Snapshots(string) ([]SnapshotEntry, error) { return f.snapshots, 
 func (f *fake) Rollback(_ context.Context, name, snapshot string, _ io.Writer) (string, error) {
 	return "2026-11-13T100000Z", f.call("rollback %s %s", name, snapshot)
 }
-func (f *fake) Archive(_ context.Context, name string, _ io.Writer) error {
+func (f *fake) Archive(_ context.Context, name string, _ io.Writer) (string, error) {
 	if err := f.call("archive %s", name); err != nil {
-		return err
+		return "", err
 	}
 	for i := range f.snap.Envs {
 		if f.snap.Envs[i].Env.Name == name {
@@ -114,7 +114,7 @@ func (f *fake) Archive(_ context.Context, name string, _ io.Writer) error {
 			f.snap.Envs[i].Status = ops.Status{}
 		}
 	}
-	return nil
+	return fmt.Sprintf("%q is archived and its GitHub token revoked", name), nil
 }
 func (f *fake) Unarchive(_ context.Context, name string, _ io.Writer) error {
 	if err := f.call("unarchive %s", name); err != nil {

@@ -239,7 +239,7 @@ func TestUpDownRestart(t *testing.T) {
 	}
 	// The resources carry this directory's id, and the hostname is the name.
 	owner, _ := config.Store{Dir: b.dir}.Owner()
-	if got := b.engine.Containers[dev].Labels["bulkhead.owner"]; got != owner || owner == "" {
+	if got := b.engine.Containers[dev].Labels["io.github.ys319.bulkhead.owner"]; got != owner || owner == "" {
 		t.Errorf("owner label = %q, want %q", got, owner)
 	}
 	// The machine key was made on the way and is what gets in.

@@ -113,7 +113,7 @@ func (a *app) setGitHubToken(ctx context.Context, ref, token string, request git
 	if err != nil {
 		return githubSetResult{}, err
 	}
-	env, err := tokenHolder(store, ref)
+	env, err := tokenTarget(store, ref)
 	if err != nil {
 		return githubSetResult{}, err
 	}
@@ -236,6 +236,10 @@ func (a *app) revokeGitHubToken(ctx context.Context, ref string) (githubRevokeRe
 	if err := store.RemoveGitHub(env.ID); err != nil {
 		return result, fmt.Errorf("the token is revoked, but its record could not be removed: %w", err)
 	}
+	if env.Archived != "" {
+		// Its volumes are gone, the token's among them: nothing to take out.
+		return result, nil
+	}
 	result.ClearErr = a.applyTokens(ctx, store, env.ID, func(w volumeWriter, ctx context.Context, _ config.Store) error {
 		return w.clearGitHub(ctx)
 	})
@@ -265,6 +269,29 @@ func (a *app) revokeBeforeDestroy(ctx context.Context, store config.Store, id st
 		return fmt.Sprintf("revoking the GitHub token failed (%v) — %s", err, github.ManualRevokeHint(state.TokenName))
 	}
 	return ""
+}
+
+// revokeForArchive revokes the token of an environment that has just been
+// put away: an environment that is asleep should not hold a credential
+// that works. The record goes with it — there is no volume left to clear.
+// When GitHub does not confirm, the record stays (it is what a retry
+// needs) and the warning says how to retry.
+func (a *app) revokeForArchive(ctx context.Context, store config.Store, env config.Environment) (revoked bool, warning string) {
+	state, err := store.LoadGitHub(env.ID)
+	if err != nil {
+		return false, "the GitHub token's record could not be read, so the token was not revoked — check " + github.SettingsURL
+	}
+	if state == nil {
+		return false, ""
+	}
+	if err := (github.Client{HTTP: a.httpClient}).Revoke(ctx, state.Token); err != nil {
+		return false, fmt.Sprintf("revoking the GitHub token failed (%v) — it still works; bh github revoke %s retries, or %s",
+			err, env.Name, github.ManualRevokeHint(state.TokenName))
+	}
+	if err := store.RemoveGitHub(env.ID); err != nil {
+		return true, fmt.Sprintf("the GitHub token is revoked, but its record could not be removed: %v", err)
+	}
+	return true, ""
 }
 
 // githubSummary is the token in one line: "push · octo · 2 repos · expires in 12d".

@@ -19,10 +19,19 @@ import (
 	"github.com/moby/moby/api/types/network"
 )
 
-// Label keys bh puts on every resource it creates. The namespace is still
-// open (spec draft §12); keep it in this one place.
+// Label keys bh puts on every resource it creates, in a namespace of its
+// own (the reverse of the repository's address, as Docker asks of labels).
+//
+// Builds before 2026-11-13 used LegacyLabelPrefix. Containers with those
+// labels are replaced at their next bh up — the labels are part of what
+// the spec hash covers — but volumes and networks keep the labels they
+// were created with: whatever comes to read them (a prune) has to take
+// both prefixes, and the labels Docker Compose gave the volumes that came
+// over from the TypeScript version.
 const (
-	labelPrefix = "bulkhead."
+	LegacyLabelPrefix = "bulkhead."
+
+	labelPrefix = "io.github.ys319.bulkhead."
 	LabelOwner  = labelPrefix + "owner" // which config directory owns the resource
 	LabelEnv    = labelPrefix + "env"   // environment id
 	LabelRole   = labelPrefix + "role"  // holder, dev, network, or a volume key
