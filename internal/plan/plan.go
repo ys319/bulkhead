@@ -40,6 +40,55 @@ var VolumeKeys = []string{"workspace", "home", "nix", "hostkeys"}
 // environment had there is still in place after bh migrate.
 var InjectKeys = []string{"github", "tokens"}
 
+// SnapshotKeys are the volumes a snapshot holds, most important first: the
+// user's work and the state of the environment. The tool store (nix) is
+// not among them — it is large and init.sh brings it back — and neither is
+// the ssh host identity, which belongs to the environment, not to its data.
+var SnapshotKeys = []string{"workspace", "home"}
+
+// HomeLeftOut are the paths of the home volume, relative to its root, that
+// a snapshot does not hold and a rollback does not touch:
+//   - what can be had again for nothing (caches, the editor's server);
+//   - what points into the nix volume. A home taken back without its nix
+//     store would have links that lead nowhere, nix itself among them, so
+//     this part of home stays with whatever nix volume is there: the
+//     current one on a rollback, the image's on a fresh volume;
+//   - the mark that init.sh has run, so that it runs again in a home that
+//     starts from a snapshot and a fresh nix volume, and installs the tools.
+var HomeLeftOut = []string{
+	".cache",
+	".vscode-server",
+	".nix-profile",
+	".nix-defexpr",
+	".nix-channels",
+	".local/state/nix",
+	".config/bulkhead/initialized",
+}
+
+// LeftOut are the paths a snapshot leaves out of the volume.
+func LeftOut(key string) []string {
+	if key == "home" {
+		return append([]string{}, HomeLeftOut...)
+	}
+	return nil
+}
+
+// ArchiveKeys are the volumes an archived environment gives up: all but
+// the ssh host identity, which is a few kilobytes and keeps the environment
+// the same host to every ssh client when it comes back.
+func ArchiveKeys() []string {
+	var keys []string
+	for _, key := range AllVolumeKeys() {
+		if key != "hostkeys" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+// VolumeTarget is where dev mounts the volume.
+func VolumeTarget(key string) string { return volumeTargets[key] }
+
 // AllVolumeKeys are all the volumes of an environment: what up creates and
 // destroy removes.
 func AllVolumeKeys() []string { return append(append([]string{}, VolumeKeys...), InjectKeys...) }
