@@ -16,6 +16,8 @@ import (
 	"github.com/ys319/bulkhead/internal/ops"
 	"github.com/ys319/bulkhead/internal/sshconfig"
 	"github.com/ys319/bulkhead/internal/sshkey"
+
+	"golang.org/x/term"
 )
 
 // runTool runs a program of the host and returns what it printed. The
@@ -33,11 +35,9 @@ func runTool(name string, args []string) (string, error) {
 	return out.String(), nil
 }
 
-// stdinIsTerminal: somebody is typing, as opposed to a pipe or a file.
-func stdinIsTerminal() bool {
-	info, err := os.Stdin.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
-}
+// stdinIsTerminal: somebody is typing, as opposed to a pipe or a file — or
+// /dev/null, which is a character device too and has nobody behind it.
+func stdinIsTerminal() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 
 // load reads the configuration directory.
 func (a *app) load() (config.Store, *config.Config, error) {
