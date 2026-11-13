@@ -10,13 +10,16 @@
 # destroys it at the end. Takes a few minutes: it builds one small image.
 #
 # The boundary itself (LAN blocked, capabilities, namespaces) is the
-# business of scripts/verify.sh; run that on the same environment with
-#   BH_CONFIG_DIR=... scripts/verify.sh <bh-binary> verify-features
-# by passing --keep here, which leaves the environment and prints where.
+# business of scripts/verify.sh. When that script sits next to this one it
+# is run at the end, on the same environment: the features above changed
+# what dev mounts, and the boundary has to hold with them.
+#
+# --keep leaves the environment and prints where.
 set -uo pipefail
 
 BH=${1:?bh binary}
 case "$BH" in /*) ;; *) BH=$PWD/$BH ;; esac
+BOUNDARY=$(cd "$(dirname "$0")" && pwd)/verify.sh
 KEEP=${2:-}
 NAME=verify-features
 PORT=${BH_VERIFY_PORT:-23951}
@@ -187,6 +190,15 @@ check "hostname inside" bash -c "[ \"\$(docker exec bulkhead-$ID-dev hostname)\"
 echo "== down =="
 check "down --all stops it" "$BH" down --all
 check "state is stopped" bash -c "\"$BH\" status verify-renamed | grep -q '^state: *stopped'"
+
+echo
+if [ -f "$BOUNDARY" ]; then
+  echo "== the boundary (verify.sh, its own report follows) =="
+  check "up again" "$BH" up verify-renamed
+  if bash "$BOUNDARY" "$BH" verify-renamed; then ok "verify.sh passed"; else ng "verify.sh reported failures (above)"; fi
+else
+  skip "verify.sh is not next to this script: the boundary was not checked"
+fi
 
 echo
 echo "By hand, at a terminal: bh (the full-screen interface), bh root-shell <env>,"

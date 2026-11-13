@@ -167,9 +167,8 @@ id_dev=$(docker inspect -f '{{.Id}}' "$DEV")
 check "bh down" "$BH" down "$NAME"
 check "bh status says stopped" bash -c "\"$BH\" status $NAME | grep -q \"^state: *stopped\""
 check "containers are kept, stopped" bash -c "[ \"\$(docker inspect -f '{{.State.Status}}' $HOLDER)\" = exited ] && [ \"\$(docker inspect -f '{{.State.Status}}' $DEV)\" = exited ]"
-# The four volumes bh mounts. (An environment migrated from the TypeScript
-# version may also have its old _github / _tokens volumes, which nothing uses.)
-check "volumes stay referenced (not dangling)" bash -c "! docker volume ls -q --filter dangling=true | grep -Eq '^bulkhead-${ID}_(workspace|home|nix|hostkeys)$'"
+# The volumes bh mounts: the data, and the two the tokens are handed in by.
+check "volumes stay referenced (not dangling)" bash -c "! docker volume ls -q --filter dangling=true | grep -Eq '^bulkhead-${ID}_(workspace|home|nix|hostkeys|github|tokens)$'"
 check "bh up (same containers)" "$BH" up "$NAME"
 check "same container ids after down/up" bash -c "[ \"\$(docker inspect -f '{{.Id}}' $HOLDER)\" = $id_holder ] && [ \"\$(docker inspect -f '{{.Id}}' $DEV)\" = $id_dev ]"
 ns_holder=$(holder readlink /proc/1/ns/net)
