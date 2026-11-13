@@ -500,30 +500,49 @@ exec の端末接続が Windows 固有の不確定要素）。
   端末なら選択を出す。
 - **ディスク使用量**: `status` と TUI の詳細に出す（一覧では取らない）。
 
-**実機で未確認のもの（まとめて確かめる）。** `scripts/verify-features.sh <bh>` が、専用の
-設定ディレクトリに使い捨ての環境を作って下の多くを確かめ、最後に消す。手で見るしかない
-ものには (手) を付けた。
+**実機での確認（2026-11-13、macOS・Docker Desktop 29.9.3・arm64）。**
+`scripts/verify-features.sh <bh>` が、専用の設定ディレクトリに使い捨ての環境を作って機能を
+確かめ、続けて同じ環境で `scripts/verify.sh`（境界）を流し、最後に消す。`75b6ee0` のビルドで:
+
+- **境界（verify.sh）は 54 項目すべて通過** — `init.sh` の bind とトークン用のボリューム2つが
+  増えた後の dev でも保たれている。
+- 通ったもの: `init.sh`（初回に1回走る・中から書き換えられない）/ トークンのボリュームが中から
+  書き換えられない / `logs`（印つきの行、follow の Ctrl-C）/ `status` の disk 行 / 鍵の付け外しと
+  ssh の Host 項目 / dev.Dockerfile / `reset` / `rename` / `down --all` / `destroy` の後始末。
+- 手で通ったもの: `root-shell`、`bh github set`、TUI の基本操作（macOS）。
+- 見つかって直したもの:
+  - doctor が正常な環境に FAIL を出した。macOS の一時ディレクトリは `/var/folders` →
+    `/private/var/folders` のシンボリックリンクで、Docker Desktop は bind をリンクの先の
+    パスで報告する。照合にリンクを解いたパスを足した。
+  - `bh open` が、開いている VS Code を前に出すだけだった（開くフォルダを渡していなかった）。
+  - TUI から始めた `bh logs` を Ctrl-C で止めると、TUI ごと終わった。
+  - TUI から始めたプログラムが失敗すると、全画面がすぐ戻って出力が読めなかった（ssh の
+    「ホスト鍵が変わった」の警告など）。失敗したときは Enter を待つ。
+  - known_hosts がポートごとだったので、前に別の環境が使ったポートで警告が出た。環境の id の
+    名前（`HostKeyAlias bh-<id>`）で覚えるようにした。
+  - 値つきの行があるメニュー（Runtime など）が画面いっぱいに広がった。
+  - スクリプト側の間違い2つ（`bh init` の再実行の行数の読み方、トークンの検査が飛ばされる）。
+
+**まだ実機で確かめていないもの。** (手) は手で見るしかないもの。
 
 | 対象 | 確かめること |
 | --- | --- |
-| init.sh | 初回起動で1回走る / 中から書き換えられない / `bh init` で再実行できる |
-| トークンのボリューム | 中から書き換えられない / `bh token set` が新しいシェルに届き、`remove` で消える。書き込みは使い捨てコンテナ（標準入力の受け渡し・CHOWN / DAC_OVERRIDE / FOWNER だけの権限）で、**この経路は一度も実機で動いていない** — 所有者とモード（uid 1000・600）も見る |
-| GitHub トークン (手) | `bh github set` の発行画面の誘導・GitHub API での検証（持ち主・期限・リポジトリ）・書き込み、git と gh から使えること、`revoke`、`destroy` 時の失効。端末での非表示入力（Windows のコンソールを含む）とブラウザの起動 |
-| logs | 2つのコンテナの行が印つきで出る / follow が Ctrl-C で正常終了する |
-| root-shell (手) | root のシェルに入れる。矢印キー・ウィンドウの大きさの変更・終了後の端末の状態 |
-| dev.Dockerfile | 環境ごとのイメージがビルドされて使われる / ファイルを消すと基底へ戻る |
+| 上の修正 | doctor が起動直後の環境で fail も warn も出さない / `bh open` が新しいウィンドウを開く / TUI の Logs から Ctrl-C で TUI へ戻る / 失敗した ssh の後で Enter を待つ / `HostKeyAlias` つきの項目で VS Code Remote SSH がつながる / メニューの幅 |
+| トークンの書き込み | `bh token set` が新しいシェルに届き、`remove` で消える。所有者とモード（uid 1000・600）。スクリプトの間違いで飛ばされていた（`bh github set` は同じ書き込みの経路を通り、手で通っている） |
+| init.sh の再実行 | `bh init` の後で2回目が走っている（コマンドは成功。行数の検査がスクリプトの間違いで失敗していた） |
+| GitHub トークン (手) | `revoke`、`destroy` 時の失効、git と gh から使えること。Windows のコンソールでの非表示入力 |
 | restart --rebuild (手) | `--pull --no-cache` で作り直され、コンテナが新しいイメージで起動する |
 | GPU (手・対応機のみ) | legacy / cdi の起動、`bh gpu list`、デバイスノードの gid |
-| reset | home と nix だけが消え、workspace とホスト鍵が残り、init.sh がもう一度走る |
-| rename | コンテナはそのまま、作り直すとホスト名が新しい名前になる |
-| 鍵の付け外し | attach した鍵で、次の `bh up` の後にログインできる |
-| SSH 設定 | 断片の項目で `ssh bulkhead-<name>` が通る / `bh open` (手) |
-| status / doctor | disk 行が出る / **起動した直後の環境で doctor が fail も warn も出さない**（`ContainerInspect` の項目の読み取り、Docker Desktop での `init.sh` のパスの照合、dev.Dockerfile つきの環境のイメージ名の照合が、偽物でしか試せていない） |
 | 補完 (手) | `eval "$(bh completion zsh)"` / bash で、コマンド・サブコマンド・環境名が補完される |
 | events (手) | TUI を開いたまま別の端末で `bh up` / `bh down` → 一覧が追従する |
-| TUI (手) | 実際の端末での描画・キー操作・shell-out からの復帰。Windows Terminal と macOS |
 | migrate の追加分 (手) | dev.Dockerfile・トークン・init.sh を持つ TS 版の環境の移行 |
-| Windows (手) | named pipe への接続、`init.sh` の bind（ドライブレターつきのパス）、root-shell |
+| Windows (手) | named pipe への接続、`init.sh` の bind（ドライブレターつきのパス。doctor の照合も）、root-shell、TUI |
+
+作り直すときに入れる要望（2026-11-13）:
+
+- **GitHub トークンの更新。** 設定済みのトークンを、同じ指定（preset・owner・リポジトリ）のまま
+  発行し直す流れが要る。いまは `bh github set` を最初からやり直すしかない。§6・§7 の再設計と
+  一緒に決める。
 
 残り: データの退避（§8）/ `prune` / `--json`（形を決めてから — TS 版の形は compose の座標を
 含んでいて、そのままは移せない）/ Releases への自動ビルド / §6・§7 の再設計 / ビルドの経路の
