@@ -401,3 +401,85 @@ func TestMigrateBringsTheEnvironmentsFilesAndInitScript(t *testing.T) {
 		t.Errorf("init.sh was replaced: %q", data)
 	}
 }
+
+// Handing an environment back gives the TypeScript version its token files
+// as they were, and leaves none of the values where bh kept them. Nothing
+// is revoked: the tokens are the ones the TypeScript version goes on using.
+func TestMigrateUndoGivesTheTokensBackAndKeepsNone(t *testing.T) {
+	b := newBench(t)
+	oldDir := b.legacyEnv("web", legacyWeb)
+	github := `{
+  "token": "` + patNew + `",
+  "preset": "push+pr",
+  "owner": "octo",
+  "tokenName": "bulkhead-web",
+  "issuedAt": "2026-10-20T01:02:03.000Z",
+  "expiresAt": "2026-11-19T01:02:03.000Z",
+  "repos": ["octo/app"]
+}
+`
+	tokens := `{
+  "tokens": [
+    { "kind": "hf", "name": "HF_TOKEN", "value": "` + hfToken + `", "addedAt": "2026-10-21T00:00:00.000Z" },
+    { "kind": "custom", "name": "NPM_TOKEN", "value": "npm_abc123", "addedAt": "2026-10-22T00:00:00.000Z" }
+  ]
+}
+`
+	b.write(filepath.Join(oldDir, "github.json"), github)
+	b.write(filepath.Join(oldDir, "tokens.json"), tokens)
+	b.engine.AddLegacy("web", true)
+	volumes := maps.Clone(b.engine.Volumes)
+
+	// The old push+pr is contribute here, but the token is the old one: it
+	// lacks what contribute gives today, and migrate says so.
+	out := b.ok("migrate", "web", "--yes")
+	if !strings.Contains(out, "does not read the results of CI") || !strings.Contains(out, "bh token set web github contribute") {
+		t.Errorf("no word about what the old token cannot do:\n%s", out)
+	}
+	if b.kept("web", "token/github") != patNew || b.kept("web", "secret/NPM_TOKEN") != "npm_abc123" {
+		t.Fatalf("keychain = %v", b.keychain)
+	}
+	// The old files went with the old settings, untouched.
+	retired := filepath.Join(b.legacy, "environments.migrated", "web")
+	for file, want := range map[string]string{"github.json": github, "tokens.json": tokens} {
+		if data, _ := os.ReadFile(filepath.Join(retired, file)); string(data) != want {
+			t.Errorf("%s of the old settings changed:\n%s", file, data)
+		}
+	}
+
+	requests := len(b.web.Requests())
+	b.ok("migrate", "--undo", "web", "--yes")
+	for file, want := range map[string]string{"github.json": github, "tokens.json": tokens} {
+		if data, _ := os.ReadFile(filepath.Join(oldDir, file)); string(data) != want {
+			t.Errorf("%s was not handed back as it was:\n%s", file, data)
+		}
+	}
+	for key := range b.keychain {
+		if strings.Contains(key, "/web/") {
+			t.Errorf("bh still keeps %s", key)
+		}
+	}
+	if made := b.web.Requests()[requests:]; len(made) != 0 {
+		t.Errorf("undo talked to a service: %v", made)
+	}
+	b.noVolumeRemoved(volumes)
+
+	// And it can be taken over again.
+	b.ok("migrate", "web", "--yes")
+	if got := b.kept("web", "token/github"); got != patNew {
+		t.Errorf("after migrating again: kept %q", got)
+	}
+	b.noVolumeRemoved(volumes)
+}
+
+// A token of the read preset is what it is here too: nothing to say.
+func TestMigrateSaysNothingAboutAReadToken(t *testing.T) {
+	b := newBench(t)
+	dir := b.legacyEnv("web", legacyWeb)
+	b.write(filepath.Join(dir, "github.json"), `{"token": "`+patNew+`", "preset": "read", "owner": "octo", "tokenName": "bulkhead-web",
+		"issuedAt": "2026-10-20T01:02:03.000Z", "expiresAt": null, "repos": null}`)
+	b.engine.AddLegacy("web", false)
+	if out := b.ok("migrate", "web", "--yes"); strings.Contains(out, "results of CI") {
+		t.Errorf("output:\n%s", out)
+	}
+}

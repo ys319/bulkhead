@@ -116,6 +116,15 @@ bh migrate <name>    # 何をするかを示し、確認してから引き取る
 `bh migrate --undo <name>` で TypeScript 版へ戻せる。詳しくは仕様案の §11。
 **最初の1つは、消えても困らない環境で試すこと。**
 
+移行でデータに触れていないことは、bh とは別に確かめられる（読むだけ。ボリュームの作成時刻、
+workspace の全ファイル、SSH のホスト鍵などを前後で比べる）:
+
+```
+scripts/verify-migrate.sh before <name>
+bh migrate <name>
+scripts/verify-migrate.sh after <bh> <name>
+```
+
 ## 開発
 
 道具は `flake.nix` の devShell で揃える:

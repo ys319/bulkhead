@@ -74,6 +74,9 @@ scripts/verify.sh ./dist/bh verify-a
 ./dist/bh destroy verify-a --yes
 ```
 
+TS 版の環境の移行（`bh migrate`）は、`scripts/verify-migrate.sh before <env>` → 移行 →
+`… after <bh> <env>` で、データに触れていないことを docker から確かめる（読むだけ）。
+
 flake は git が追跡しているファイルしか見ない — 新しいファイルは `git add -N` してから。
 
 ## 依存を変えるとき（仕様案 §15）

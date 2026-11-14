@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
@@ -352,8 +353,14 @@ func (a *app) migrateOne(ctx context.Context, legacy config.LegacyStore, store c
 	// yet to use a file — the records stay as they are and are taken over
 	// the next time they are read.
 	if env.Local() {
-		if _, err := a.credentialsOf(store, env, true); err != nil {
+		creds, err := a.credentialsOf(store, env, true)
+		if err != nil {
 			fmt.Fprintf(out, "  its tokens were not taken over yet: %s\n  (they are the next time they are read — bh token list %s)\n", oneLine(err), name)
+		} else if token := creds.token(config.ServiceGitHub); token != nil && slices.Contains(result.files, "github.json") && token.Preset != "read" {
+			// The token is the one the TypeScript version had issued: its
+			// push and push+pr gave no access to the results of CI, which
+			// the presets of the same names give here.
+			fmt.Fprintf(out, "  its GitHub token came along as it was issued: it does not read the results of CI (gh run view).\n  For one that does: bh token set %s github %s\n", name, token.Preset)
 		}
 	}
 	fmt.Fprintf(out, "  old settings: %s\n", legacy.RetiredDir(name))
@@ -464,6 +471,17 @@ func (a *app) migrateUndo(ctx context.Context, legacy config.LegacyStore, store 
 	}
 	if err := legacy.Restore(id); err != nil {
 		return err
+	}
+	// The values bh keeps for it — its tokens and secrets, in the credential
+	// store of this machine — go with bh's settings, or they would stay
+	// there for good. Nothing is revoked: the TypeScript version has the
+	// tokens it had, in the directory that just moved back.
+	if env.Local() {
+		if creds, err := a.credentialsOf(store, env, false); err != nil {
+			a.warn([]string{fmt.Sprintf("the values bh keeps for %q could not be looked up: %s", name, oneLine(err))})
+		} else if err := creds.forget(); err != nil {
+			a.warn([]string{fmt.Sprintf("some values bh keeps for %q could not be removed from where this machine keeps them: %s", name, oneLine(err))})
+		}
 	}
 	if err := store.RemoveEnvironment(id); err != nil {
 		return err

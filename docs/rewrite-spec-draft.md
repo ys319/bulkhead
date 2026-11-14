@@ -643,8 +643,8 @@ Settings → Tokens が Variables と Secrets の2つになること、Remote �
 守ること（テストで固定 — `internal/ops/adopt_test.go` と `cmd/bh/migrate_test.go`）:
 
 1. **ボリュームを消さない・作り直さない・コピーしない。** migrate と undo のどの経路にも
-   ボリュームの削除は無い。TS 版だけが使っていた `_github` / `_tokens` も残し、
-   「使わなくなったが残してある」と表示するだけ。
+   ボリュームの削除は無い。6本（workspace / home / nix / hostkeys / github / tokens）とも
+   同じ名前のものをそのまま使う。
 2. **ボリュームがどのコンテナからも参照されない瞬間を作らない。** 新しいコンテナを
    （起動せずに）先に作り、古いコンテナを外すのはその後。
 3. **古いコンテナは、新しいコンテナが起動ゲートを通るまで消さない。** 通らなかったら
@@ -682,6 +682,11 @@ env.json が読めない。
 - 環境ディレクトリの中の利用者のファイル（`dev.Dockerfile` と、それが COPY するファイル）と
   トークンの記録（`github.json` / `tokens.json`）を、作り直し版の環境ディレクトリへ**写す**
   （元は退避先に残る）。TS 版が自分用に生成したもの（`compose.yaml` など）は写さない。
+  写したトークンの記録は、移行の最後に今の形へ読み替える（§7「記録と移行」— 値は資格情報
+  ストアへ入り、作り直し版のディレクトリのファイルには残らない）。
+- TS 版の `push` / `push+pr` で発行したトークンは、同じ名前（`push` / `contribute`）の記録に
+  なるが、**トークンそのものは前のまま**で、今のプリセットが足した CI の結果の読み取りは
+  持たない。migrate はそのことと、発行し直すコマンドを表示する。
 - トークンの中身は `_github` / `_tokens` ボリュームにあり、ボリュームはそのまま使うので
   何もしなくても付いてくる（マウント先も TS 版と同じ）。
 - `init.sh`: 作り直し版にまだ無ければ TS 版のものを写す。既にあって中身が違えば写さず、
@@ -694,7 +699,10 @@ env.json が読めない。
 保たれるもの: sshPort と hostkeys が同じなので **known_hosts の警告は出ない**。
 
 undo: 新しいコンテナとネットワークを消し（ボリュームは残す）、旧設定を
-`environments/<name>` へ戻し、作り直し版の設定を消す。その後は TS 版の `bh up` で起動する。
+`environments/<name>` へ戻し、作り直し版の設定を消す。作り直し版が資格情報ストアに入れた
+その環境の値（token と secret）も消す — 残すと、キーチェーンに持ち主のいない値が残り続ける。
+サービス側では何も失効させない（TS 版が、戻ったファイルの同じトークンを使い続ける）。
+その後は TS 版の `bh up` で起動する。
 **その間はボリュームがどのコンテナからも参照されない**ので、`docker volume prune -a` を
 しないよう表示する。
 
@@ -708,8 +716,41 @@ undo: 新しいコンテナとネットワークを消し（ボリュームは�
 - 停止中の環境の移行（止まったまま、新しいコンテナが作成済みでボリュームを参照）→ `bh up`。
 - `dockerSocket: true` の環境の移行と起動（dev からソケットに届く。ほかの制限はそのまま）。
 
+TS 版のソースと突き合わせたこと（2026-11-14 — 実機の前の確認。`../bulkhead-ts/src`）:
+
+- 名前: compose のプロジェクト `bulkhead-<name>`、コンテナ `…-holder-1` / `…-dev-1`、
+  ネットワーク `…_default`、ボリューム `bulkhead-<name>_<key>`（6本）とマウント先 — `plan` の
+  `Legacy*` と今の `Volume` / `VolumeTarget` に一致。
+- env.json の項目（`type` / `sshPort` / `publish` / `restart` / `authorizedKeys` / `gpu` /
+  `cdiDevices` / `dockerSocket`）— 読み取り側と一致。
+- `github.json` / `tokens.json` の形と、ボリュームの中の形（github は `token` と `meta`、
+  tokens は `env` に `NAME=value`）— 読み替えと今の書き込みに一致。ボリュームの中身は
+  書き直さなくても新しいコンテナで読める。
+- `dev.Dockerfile` の `FROM bulkhead-dev-base` — 作り直し版も同じ名前のタグを付けてから
+  ビルドする。**両方を使っている間は、このタグを後から付けた方の基底イメージを指す**
+  （どちらもビルドの前に付け直すので、自分の環境のビルドは自分の基底から始まる。TS 版の
+  カスタムでない環境は、コンテナを作り直したときに作り直し版の基底イメージで動くことがある）。
+
 未確認: **TS 版が実際に生成した compose.yaml の環境**（このマシンからはホスト側の設定が
 見えないため、同じ形を手で作って試した）。最初の1件は、消えても困らない環境で試すこと。
+
+実機での確かめ方（`scripts/verify-migrate.sh` — bh の言うことを使わず、docker で見る）:
+
+```
+scripts/verify-migrate.sh before <env>             # TS 版のうちに、ボリュームを読んで控える
+bh migrate <env>
+scripts/verify-migrate.sh after <bh-binary> <env>  # 比べる
+```
+
+比べるもの: 6本のボリュームが同じもの（作成時刻が同じ）/ workspace の全エントリ（パス・
+大きさ・更新時刻）/ SSH のホスト鍵（バイト単位）/ home から消えたパスが無い（キャッシュと
+エディタのサーバーは除く）/ nix の store の件数 / 古いコンテナとネットワークが無い / 新しい
+dev が同じボリュームを同じ場所で使っている / 動いていたなら動いている / `bh status` と
+ssh ログイン。読むだけ（ボリュームは読み取り専用で、ネットワークなしの使い捨てコンテナへ
+付ける）。控えは `${TMPDIR:-/tmp}/bh-migrate-check/<env>` に置き、ファイル名は表示しない。
+**このスクリプトは本物の Docker ではまだ一度も動かしていない**（偽の docker で、うまくいった
+移行と、ファイルが消えた・ボリュームが作り直された・ホスト鍵が違う・home のパスが消えた・
+古いコンテナが残った場合を通しただけ）。
 
 ## 12. 未決（決める順）
 
@@ -911,12 +952,12 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | 上の修正 (手) | `bh open` が新しいウィンドウを開く / TUI の Logs から Ctrl-C で TUI へ戻る / 失敗した ssh の後で Enter を待つ / `HostKeyAlias` つきの項目で VS Code Remote SSH がつながる / メニューの幅 / 下段の並び（メッセージ → 操作説明） |
 | 資格情報ストア (手) | ssh 越しなど使えない場所で「ファイルにする」案内が出ること。Windows・Linux は未確認（macOS のキーチェーンは 2026-11-13 に通過 — 上） |
 | 補完 (手) | `eval "$(bh completion zsh)"` で、`bh token set <env> ` の後にサービス、その後にプリセットが説明つきで弱い順に出る / `bh var unset <env> ` で変数名 / `bh rollback <env> ` でスナップショット。ここでは本物の zsh を擬似端末で動かして確かめた。PowerShell は Linux の pwsh 7.6.5 で `TabExpansion2` を呼んで確かめた（コマンド・サブコマンド・環境・サービス・プリセットの説明・フラグとその値・引用符つきの語）— **Windows と Windows PowerShell 5.1 では未確認**。bash は対話の bash 5.2.37（Linux）を擬似端末で動かして確かめた（コマンド・サブコマンド・環境・サービス・プリセットが弱い順・変数名・フラグとその値・ファイル名（空白入り、ディレクトリの中）・行の途中・候補が無い位置では何も出ない）— **macOS の bash 3.2 は未確認**（ここで 3.2 をビルドして試すのは止めた。`compopt` が無いので、順序はアルファベット順になり、ファイル名の空白のエスケープとディレクトリ末尾の `/` は付かない見込み。`/bin/bash` で `eval "$(bh completion bash)"` して `bh token set <env> github ` で Tab） |
-| token (手) | 本物のトークンで: `bh token set <env> <service> <preset>`、GitHub の3つのプリセットで発行ページに入る権限、`bh token refresh`（Regenerate して貼る）、`bh token remove` の失効、Hugging Face の種類の読み取りと失効（**Hugging Face の API は文書を読んだだけで、一度も呼んでいない**）、`gh run view --log` が `push` で通ること、期限が近いときの表示。前のビルドで設定したトークン（`github.json`）が読み替えられること |
+| token (手) | **GitHub は 2026-11-14 に通過**（ユーザー、Mac — 本物のトークンを割り当て、`bh token refresh`、環境の中の `gh auth status`）。残り: `bh token remove` の失効、Hugging Face の種類の読み取りと失効（**Hugging Face の API は文書を読んだだけで、一度も呼んでいない**）、`gh run view --log` が `push` で通ること、期限が近いときの表示。前のビルドで設定したトークン（`github.json`）が読み替えられること |
 | GitHub トークン (手) | `revoke`、`destroy` 時の失効、git と gh から使えること。Windows のコンソールでの非表示入力 |
 | restart --rebuild (手) | `--pull --no-cache` で作り直され、コンテナが新しいイメージで起動する |
 | GPU (手・対応機のみ) | legacy / cdi の起動、`bh gpu list`、デバイスノードの gid |
 | events (手) | TUI を開いたまま別の端末で `bh up` / `bh down` → 一覧が追従する |
-| migrate の追加分 (手) | dev.Dockerfile・トークン・init.sh を持つ TS 版の環境の移行 |
+| migrate (手) | **TS 版が実際に作った環境**の移行を `scripts/verify-migrate.sh` の before / after で（§11）。dev.Dockerfile・トークン・init.sh を持つ環境、止まっている環境、`--undo` して TS 版で起動し直せること。スクリプト自体も本物の Docker では初めて動く |
 | Windows (手) | named pipe への接続、`init.sh` の bind（ドライブレターつきのパス。doctor の照合も）、root-shell、TUI |
 | スナップショット (手) | TUI の Snapshot / Roll back / Archive / Unarchive。大きな workspace での所要時間。アーカイブ時の GitHub トークンの失効（本物のトークンで） |
 | reset (手) | TUI の Reset の2段階 |
