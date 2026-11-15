@@ -37,6 +37,26 @@ go build -o bh ./cmd/bh
 できた `bh` を PATH の通った場所へ置く。ほかに置くものは無い（コンテナの定義はバイナリに
 埋め込んである）。
 
+### Nix（flake）で入れる
+
+このリポジトリの flake は `packages.<system>.default` に `bh` を出す（Linux / macOS の
+x86_64・aarch64）。zsh と bash の補完も一緒に入るので、`eval "$(bh completion …)"` は要らない。
+home-manager の構成（flake）へ足す例:
+
+```nix
+# flake.nix の inputs
+bulkhead.url = "github:ys319/bulkhead";
+
+# home-manager のモジュール（inputs を extraSpecialArgs で渡している場合）
+{ pkgs, bulkhead, ... }:
+{
+  home.packages = [ bulkhead.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+}
+```
+
+`inputs.nixpkgs.follows` は付けないのを勧める — 付けなければ、このリポジトリの `flake.lock` が
+固定した nixpkgs（Go のツールチェーン）でビルドされる。更新は `nix flake update bulkhead`。
+
 ```
 bh version       # ビルドと、接続先の Docker Engine
 bh               # TUI

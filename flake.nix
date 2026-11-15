@@ -5,7 +5,7 @@
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
   outputs =
-    { nixpkgs, ... }:
+    { self, nixpkgs, ... }:
     let
       systems = [
         "aarch64-linux"
@@ -54,7 +54,21 @@
           vendorHash = "sha256-qtjqqRt8X0JGxleOKh12YJWuW4AbbQvadp2Xsw7Tgjc=";
           subPackages = [ "cmd/bh" ];
           env.CGO_ENABLED = "0";
-          meta.mainProgram = "bh";
+          # There is no git checkout in the build for the go command to read
+          # the commit from: say which one this is (bh version).
+          ldflags = [ "-X main.commit=${self.shortRev or self.dirtyShortRev or "unknown"}" ];
+          # The completion of zsh and bash comes with the package: a profile
+          # that has bh has it without a line in ~/.zshrc.
+          nativeBuildInputs = [ pkgs.installShellFiles ];
+          postInstall = pkgs.lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''
+            installShellCompletion --cmd bh \
+              --bash <($out/bin/bh completion bash) \
+              --zsh <($out/bin/bh completion zsh)
+          '';
+          meta = {
+            description = "A sandbox for development environments (Docker), against supply-chain attacks";
+            mainProgram = "bh";
+          };
         };
       });
 

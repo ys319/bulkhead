@@ -22,8 +22,11 @@ func completedNames() []string {
 
 func TestCompletionPrintsAScript(t *testing.T) {
 	b := newBench(t)
-	if out := b.ok("completion", "zsh"); !strings.HasSuffix(out, "\ncompdef _bh bh\n") {
-		t.Errorf("zsh: the script does not end by registering itself:\n%s", out)
+	// Evaluated, it registers itself; as the file _bh of a package, zsh
+	// knows it by its first line and its first call is the completion.
+	if out := b.ok("completion", "zsh"); !strings.HasPrefix(out, "#compdef bh\n") ||
+		!strings.HasSuffix(out, "\nif [[ ${funcstack[1]} == _bh ]]; then\n  # Loaded as the file _bh: this is the first completion itself.\n  _bh \"$@\"\nelse\n  compdef _bh bh\nfi\n") {
+		t.Errorf("zsh: the script does not begin and end by registering itself:\n%s", out)
 	}
 	if out := b.ok("completion", "bash"); !strings.HasSuffix(out, "\ncomplete -F _bh bh\n") {
 		t.Errorf("bash: the script does not end by registering itself:\n%s", out)
@@ -353,13 +356,15 @@ func TestBashScriptCarriesTheLineAndTheAnswer(t *testing.T) {
 // whichever program was typed.
 func TestCompletionScriptsRegisterTheNameInUse(t *testing.T) {
 	for _, test := range []struct{ shell, program, want string }{
-		{"zsh", "bh", "\ncompdef _bh bh\n"},
-		{"zsh", "bh-darwin-arm64", "\ncompdef _bh bh bh-darwin-arm64\n"},
+		{"zsh", "bh", "\n  compdef _bh bh\n"},
+		// The first line is what makes the file work from a package.
+		{"zsh", "bh", "#compdef bh\n"},
+		{"zsh", "bh-darwin-arm64", "\n  compdef _bh bh bh-darwin-arm64\n"},
 		{"bash", "bh-linux-amd64", "\ncomplete -F _bh bh bh-linux-amd64\n"},
 		{"powershell", "bh-windows-amd64.exe", "-CommandName bh, bh-windows-amd64 -ScriptBlock"},
 		{"powershell", "bh.exe", "-CommandName bh -ScriptBlock"},
 		// A name the scripts could not carry is left out, not quoted.
-		{"zsh", "my bh; echo", "\ncompdef _bh bh\n"},
+		{"zsh", "my bh; echo", "\n  compdef _bh bh\n"},
 		{"bash", "", "\ncomplete -F _bh bh\n"},
 	} {
 		script, err := completionScript(test.shell, test.program)

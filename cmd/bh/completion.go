@@ -558,8 +558,13 @@ func completionScript(shell, program string) (string, error) {
 
 // The scripts only carry the command line to bh and its answer back. zsh
 // and PowerShell show the descriptions; bash has no place for them.
-const zshCompletion = `# bh completion (zsh) — add to your ~/.zshrc:
+// The zsh script is used in two ways: evaluated from ~/.zshrc, and as the
+// file _bh of a package (share/zsh/site-functions), which zsh loads by its
+// first line and runs as the function's first call.
+const zshCompletion = `#compdef {names}
+# bh completion (zsh) — add to your ~/.zshrc:
 #   eval "$(bh completion zsh)"
+# (not needed where bh was installed as a package that brings this file)
 
 _bh() {
   local -a lines described bare
@@ -584,7 +589,12 @@ _bh() {
   (( ${#described} + ${#bare} ))
 }
 
-compdef _bh {names}
+if [[ ${funcstack[1]} == _bh ]]; then
+  # Loaded as the file _bh: this is the first completion itself.
+  _bh "$@"
+else
+  compdef _bh {names}
+fi
 `
 
 const bashCompletion = `# bh completion (bash) — add to your ~/.bashrc:

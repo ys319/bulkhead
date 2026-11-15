@@ -26,6 +26,10 @@ import (
 // version is set at release time with -ldflags "-X main.version=...".
 var version = "0.0.0-dev"
 
+// commit is set the same way (-X main.commit=...) by builds that have no
+// git checkout for the go command to read the commit from: the Nix package.
+var commit = ""
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -389,9 +393,13 @@ func source(endpoint engine.Endpoint) string {
 	}
 }
 
-// revision is the commit the binary was built from, as recorded by the go
-// command. "unknown" outside a git checkout (for example in a Nix build).
+// revision is the commit the binary was built from: as recorded by the go
+// command, or as the build said (commit) where there was no git checkout
+// to read it from. "unknown" when neither is known.
 func revision() string {
+	if commit != "" {
+		return commit
+	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "unknown"

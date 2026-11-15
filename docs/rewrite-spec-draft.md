@@ -621,6 +621,13 @@ Settings → Tokens が Variables と Secrets の2つになること、Remote �
   新しいイメージが作られ、古いイメージのまま動いている環境は doctor が warn で示す
   （TS 版の「ビルドと checkout のずれの警告」と bh-guest の版の確認がこれに置き換わる）。
 - 署名・公証（macOS / Windows）、自己更新、パッケージマネージャ対応は未決（最初は入れない）。
+- **Nix の flake からも入れられる**（2026-11-15 — 自分のマシンへ home-manager で配るため）:
+  `packages.<system>.default`。ビルドに git の checkout が無いので、コミットは flake が
+  `-X main.commit=` で渡す（`bh version` に出る）。zsh / bash の補完をパッケージに入れる
+  （`share/zsh/site-functions/_bh` と `share/bash-completion/completions/bh.bash` — zsh の
+  スクリプトは eval でも、fpath のファイルとしても動く形にした）。Linux（aarch64）でビルドと
+  補完を確かめた。**macOS では `nix build` を一度も試していない** — ビルド中に走るテスト
+  （`cmd/bh`）も Mac では初めて動く。
 - **ビルドの経路が残る課題**（§12-2）。イメージのビルドだけは API 直が重い。
 
 ## 11. TS 版からの移行
@@ -957,6 +964,7 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | restart --rebuild (手) | `--pull --no-cache` で作り直され、コンテナが新しいイメージで起動する |
 | GPU (手・対応機のみ) | legacy / cdi の起動、`bh gpu list`、デバイスノードの gid |
 | events (手) | TUI を開いたまま別の端末で `bh up` / `bh down` → 一覧が追従する |
+| migrate (済) | **2026-11-15 に通過**（ユーザー — Mac で1件を移して確かめた後、残りの全環境を続けて移行。この開発用の環境も移行済み。`verify-migrate.sh` を使ったかは聞いていない）。以下は、そのとき確かめたかが分からないもの |
 | migrate (手) | **TS 版が実際に作った環境**の移行を `scripts/verify-migrate.sh` の before / after で（§11）。dev.Dockerfile・トークン・init.sh を持つ環境、止まっている環境、`--undo` して TS 版で起動し直せること。スクリプト自体も本物の Docker では初めて動く |
 | Windows (手) | named pipe への接続、`init.sh` の bind（ドライブレターつきのパス。doctor の照合も）、root-shell、TUI |
 | スナップショット (手) | TUI の Snapshot / Roll back / Archive / Unarchive。大きな workspace での所要時間。アーカイブ時の GitHub トークンの失効（本物のトークンで） |
