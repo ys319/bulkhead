@@ -26,6 +26,7 @@ type fake struct {
 	snap      Snapshot
 	calls     []string
 	vscode    bool
+	claude    bool
 	fail      map[string]error // by the first word of a call
 	devices   []string
 }
@@ -64,6 +65,7 @@ func (f *fake) Load(context.Context) (Snapshot, error) {
 	return snap, f.fail["load"]
 }
 func (f *fake) HasVSCode() bool { return f.vscode }
+func (f *fake) HasClaude() bool { return f.claude }
 func (f *fake) Create(name, from string) error {
 	if err := f.call("create %s from=%s", name, from); err != nil {
 		return err
@@ -148,6 +150,9 @@ func (f *fake) RunInit(_ context.Context, name string, _ io.Writer) error {
 	return f.call("init %s", name)
 }
 func (f *fake) Open(_ context.Context, name string) error { return f.call("open %s", name) }
+func (f *fake) OpenInClaude(_ context.Context, name string) error {
+	return f.call("open-in-claude %s", name)
+}
 func (f *fake) AddRemote(name, host string, port int) error {
 	if err := f.call("add-remote %s %s:%d", name, host, port); err != nil {
 		return err
@@ -509,6 +514,14 @@ func TestNameColorsShowState(t *testing.T) {
 	}
 }
 
+func TestOpenInClaudeHandsTheEnvironmentOver(t *testing.T) {
+	s := start(t)
+	s.backend.claude = true
+	s.onto("web").press("enter").pick("Open in Claude")
+	s.called("open-in-claude web")
+	s.shows("confirm the connection there")
+}
+
 func TestEnvironmentMenuFollowsTheState(t *testing.T) {
 	s := start(t)
 	s.onto("api").press("enter")
@@ -525,6 +538,15 @@ func TestEnvironmentMenuFollowsTheState(t *testing.T) {
 	if slices.Contains(s.labels(), "Open in VS Code") {
 		t.Error("Open in VS Code is offered without the code command")
 	}
+	// Claude Desktop is offered where it was found.
+	if slices.Contains(s.labels(), "Open in Claude") {
+		t.Error("Open in Claude is offered without Claude Desktop")
+	}
+	s.backend.claude = true
+	if got, want := s.labels()[:5], []string{"Stop", "Reboot", "---", "Open shell", "Open in Claude"}; !slices.Equal(got, want) {
+		t.Errorf("with Claude Desktop: %q", got)
+	}
+	s.backend.claude = false
 
 	s.pick("Maintenance")
 	if got, want := s.labels(), []string{"Root Shell", "Logs", "Edit Dockerfile", "Rebuild", "Rerun init.sh", "---", "Snapshot", "Roll back", "Archive"}; !slices.Equal(got, want) {

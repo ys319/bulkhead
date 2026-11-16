@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -46,6 +47,7 @@ type bench struct {
 	raw     int             // how often the terminal was put in raw mode
 	web     *githubtest.Web // the services tokens come from; any other request fails the test
 	opened  []string        // addresses handed to the browser
+	goos    string          // the operating system bh believes it runs on (linux when empty)
 	secret  string          // what is pasted at a hidden prompt
 	now     time.Time       // the clock; zero for the real one
 	// keychain stands in for the credential store of the operating system,
@@ -97,7 +99,7 @@ func (b *bench) run(args ...string) (code int, stdout, stderr string) {
 			}
 			return b.environ[key]
 		},
-		goos: "linux",
+		goos: cmp.Or(b.goos, "linux"),
 		dial: func(func(string) string) (dockerEngine, func(), error) {
 			return b.engine, func() {}, b.dialErr
 		},

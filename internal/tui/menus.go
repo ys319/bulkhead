@@ -160,6 +160,14 @@ func (m *Model) connectItems(name string) []item {
 			})
 		}})
 	}
+	if m.backend.HasClaude() {
+		items = append(items, item{label: "Open in Claude", run: func(m *Model) tea.Cmd {
+			// The desktop asks before it connects: nothing is open yet.
+			return m.do("Opening "+name, fmt.Sprintf("handed %q to Claude Desktop — confirm the connection there", name), false, func(io.Writer) error {
+				return m.backend.OpenInClaude(m.ctx, name)
+			})
+		}})
+	}
 	return items
 }
 

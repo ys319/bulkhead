@@ -312,7 +312,8 @@ var completedCommands = []commandSpec{
 	{name: "list", about: "all environments and their state"},
 	{name: "status", about: "one environment in detail", args: []argument{anyEnvs}},
 	{name: "ssh", about: "open a shell, or run a command", args: []argument{anyEnvs}},
-	{name: "open", about: "open in VS Code", args: []argument{anyEnvs}},
+	{name: "open", about: "open in VS Code or the Claude desktop app", args: []argument{anyEnvs},
+		flags: []flagSpec{valued("--in", oneOf(inVSCode, inClaude))}},
 	{name: "key", about: "the machine key and other keys that may log in", subs: []commandSpec{
 		{name: "show", about: "print the public key of this machine"},
 		{name: "list", about: "the registered keys or those of an environment", args: []argument{localEnvs}},

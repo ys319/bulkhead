@@ -142,7 +142,9 @@ const usageText = `usage: bh [command] [arguments]
   list                all environments and their state
   status <env>        one environment in detail
   ssh <env> [command] open a shell in the environment, or run a command
-  open <env>          open it in VS Code
+  open <env> [--in vscode|claude]
+                      open it in VS Code, or (--in claude) hand it to the
+                      Claude desktop app as an SSH session to confirm there
   key show | list | add | rename | remove | attach | detach
                       this machine's key, and other keys that may log in
                       (bh key for details)

@@ -68,12 +68,18 @@ bh               # TUI
 bh create web    # 環境を定義する（設定を書くだけ）
 bh up web        # 起動する（初回はイメージをビルドする）
 bh ssh web       # シェルに入る
-bh open web      # VS Code で開く
+bh open web      # VS Code で開く（--in claude で Claude デスクトップアプリへ）
 bh down web      # 止める（コンテナとデータは残る）
 ```
 
 `bh` だけで起動すると、同じ操作を全画面のメニューから行える。コマンドの一覧は `bh help`、
 1つのコマンドの使い方は `bh help <コマンド>`（`bh <コマンド> --help` でも同じ）。
+
+`bh open web --in claude` は、Claude デスクトップアプリ（v2.110.0 以降）の新規セッション画面を、
+SSH の接続先 `bulkhead-web`・フォルダ `/home/developer/workspace` を入れた状態で開く
+（`claude://code/new` のリンクを渡すだけ）。接続するかどうかはアプリの側で確認される。
+鍵・ポート・ユーザーはリンクに載せず、bh が `~/.ssh` に書いている `Host bulkhead-web` から
+来る — VS Code と同じ経路。
 
 設定は `~/.config/bh`（Windows は `%APPDATA%\bh`。`BH_CONFIG_DIR` で変えられる）に置かれる。
 環境のデータは Docker のボリュームにあり、**消すのは `bh destroy` / `bh reset` / `bh archive`

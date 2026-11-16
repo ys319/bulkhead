@@ -105,6 +105,7 @@ func (b backend) Load(ctx context.Context) (tui.Snapshot, error) {
 }
 
 func (b backend) HasVSCode() bool { return b.a.hasVSCode() }
+func (b backend) HasClaude() bool { return b.a.hasClaude() }
 
 func (b backend) Create(name, from string) error {
 	_, _, err := b.quiet(io.Discard).newLocal(name, from, nil)
@@ -158,6 +159,14 @@ func (b backend) RunInit(ctx context.Context, name string, progress io.Writer) e
 }
 
 func (b backend) Open(ctx context.Context, name string) error {
+	return b.openIn(ctx, name, inVSCode)
+}
+
+func (b backend) OpenInClaude(ctx context.Context, name string) error {
+	return b.openIn(ctx, name, inClaude)
+}
+
+func (b backend) openIn(ctx context.Context, name, where string) error {
 	store, cfg, err := b.a.load()
 	if err != nil {
 		return err
@@ -166,7 +175,7 @@ func (b backend) Open(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	return b.a.openInEditor(ctx, store, env)
+	return b.a.openIn(ctx, store, env, where)
 }
 
 func (b backend) AddRemote(name, host string, port int) error {

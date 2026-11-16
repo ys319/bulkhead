@@ -605,6 +605,7 @@ home と nix 以外を渡されると断る）、**ボリュームの中身を�
 | `backup` / `restore` | `snapshot ...` | §8 |
 | `export` / `import` | 同じ | 形式は版上げ |
 | `compose` | 廃止 | §5 |
+| （なし） | `open <env> --in claude` | 新規（2026-11-16、試し）。下の段落 |
 | （なし） | `migrate` | §11。移行が済んだら撤去 |
 | （なし） | `prune`（後回し） | §3 の条件で再導入 |
 
@@ -612,6 +613,25 @@ TUI は TS 版の並び（`src/ui/menus.ts` と tool-design）を仕様として
 Settings → Tokens が Variables と Secrets の2つになること、Remote の行が local と同じ操作を
 持つこと、環境メニューに Rename が入ること。更新は Engine API の events、ログは logs の
 ストリームから取る（常駐の子プロセスが無くなる）。
+
+**`open --in claude`（2026-11-16、試し）**: Claude デスクトップアプリの `claude://code/new` リンク
+（[公式文書](https://code.claude.com/docs/en/desktop) の「Open an SSH session from a link」。
+v2.110.0 以降 — それより前は SSH の指定を無視して新規セッション画面だけを開く）を OS に渡す。
+
+- リンクは `claude://code/new?ssh_host=bulkhead-<name>&ssh_folder=/home/developer/workspace`。
+  `ssh_host` は bh が `~/.ssh/bh/config` に書く項目の別名で、ユーザーとポートは付けない。
+  鍵（マシン鍵・`IdentitiesOnly`）・ポート・ユーザー・`HostKeyAlias` は項目から来る — VS Code と
+  同じ経路で、リンクには鍵を載せられない（載せる手段が無い）。`127.0.0.1` とポートを直接
+  渡すと、アプリは既定の鍵で試すことになり、known_hosts も住所とポートで記録される。
+- 開く前に VS Code と同じことをする: 動いているかの確認、マシン鍵、ssh の項目の書き直し。
+- 接続するかどうかはアプリが尋ねる（登録済みの接続と host・user・port が合えばそれを使うか、
+  合わなければ追加のダイアログ）。bh の出力は「渡した。そちらで確認を」まで。プロンプト
+  （`q`）は渡さない。
+- 渡し方: macOS は `open <リンク>` を待つ（引き受けるアプリが無いと失敗が返る）。Windows は
+  `rundll32 url.dll,FileProtocolHandler`、ほかは `xdg-open` を起動するだけで、失敗は分からない。
+- TUI の「Open in Claude」は、アプリがありそうなときだけ出す: macOS は `/Applications` か
+  `~/Applications` に `Claude.app` があるとき、Windows は常に（誰が `claude://` を引き受けるかは
+  レジストリを見ないと分からない）、ほかは出さない。CLI はどこでも試す。
 
 ## 10. 配布
 
@@ -957,6 +977,7 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | 対象 | 確かめること |
 | --- | --- |
 | 上の修正 (手) | `bh open` が新しいウィンドウを開く / TUI の Logs から Ctrl-C で TUI へ戻る / 失敗した ssh の後で Enter を待つ / `HostKeyAlias` つきの項目で VS Code Remote SSH がつながる / メニューの幅 / 下段の並び（メッセージ → 操作説明） |
+| open --in claude (手) | **実機では未確認**（ここにはデスクトップが無い。リンクの形は公式文書の例と突き合わせただけ）。`bh open <env> --in claude` で Claude Desktop（v2.110.0 以降）に確認のダイアログが出て、`bulkhead-<env>` と `/home/developer/workspace` が入っていること / 既に同じ接続を登録しているときは「それを使うか」になること / つながること / TUI に「Open in Claude」が出ること / Claude Desktop が無い Mac で失敗が伝わること。Windows は未確認 |
 | 資格情報ストア (手) | ssh 越しなど使えない場所で「ファイルにする」案内が出ること。Windows・Linux は未確認（macOS のキーチェーンは 2026-11-13 に通過 — 上） |
 | 補完 (手) | `eval "$(bh completion zsh)"` で、`bh token set <env> ` の後にサービス、その後にプリセットが説明つきで弱い順に出る / `bh var unset <env> ` で変数名 / `bh rollback <env> ` でスナップショット。ここでは本物の zsh を擬似端末で動かして確かめた。PowerShell は Linux の pwsh 7.6.5 で `TabExpansion2` を呼んで確かめた（コマンド・サブコマンド・環境・サービス・プリセットの説明・フラグとその値・引用符つきの語）— **Windows と Windows PowerShell 5.1 では未確認**。bash は対話の bash 5.2.37（Linux）を擬似端末で動かして確かめた（コマンド・サブコマンド・環境・サービス・プリセットが弱い順・変数名・フラグとその値・ファイル名（空白入り、ディレクトリの中）・行の途中・候補が無い位置では何も出ない）— **macOS の bash 3.2 は未確認**（ここで 3.2 をビルドして試すのは止めた。`compopt` が無いので、順序はアルファベット順になり、ファイル名の空白のエスケープとディレクトリ末尾の `/` は付かない見込み。`/bin/bash` で `eval "$(bh completion bash)"` して `bh token set <env> github ` で Tab） |
 | token (手) | **GitHub は 2026-11-14 に通過**（ユーザー、Mac — 本物のトークンを割り当て、`bh token refresh`、環境の中の `gh auth status`）。残り: `bh token remove` の失効、Hugging Face の種類の読み取りと失効（**Hugging Face の API は文書を読んだだけで、一度も呼んでいない**）、`gh run view --log` が `push` で通ること、期限が近いときの表示。前のビルドで設定したトークン（`github.json`）が読み替えられること |

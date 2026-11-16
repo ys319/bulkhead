@@ -294,6 +294,66 @@ func TestOpenStartsVSCodeThroughTheSSHEntry(t *testing.T) {
 	}
 }
 
+// The link names the ssh entry and nothing else: no user, no port, no key.
+// Those come from the entry, and the desktop asks before it connects.
+func TestOpenInClaudeHandsOverALinkToTheSSHEntry(t *testing.T) {
+	const link = "claude://code/new?ssh_host=bulkhead-web&ssh_folder=/home/developer/workspace"
+	b := newBench(t)
+	b.path = map[string]bool{} // VS Code is not needed for this
+	b.ok("create", "web")
+	if err := b.fails(1, "open", "web", "--in", "claude"); !strings.Contains(err, "not running") {
+		t.Errorf("stopped: %s", err)
+	}
+	b.ok("up", "web")
+
+	out := b.ok("open", "--in", "claude", "web")
+	if !slices.Equal(b.opened, []string{link}) || len(b.tools) != 0 {
+		t.Errorf("opened = %v, tools = %v", b.opened, b.tools)
+	}
+	if !strings.Contains(out, "bulkhead-web") || !strings.Contains(out, "confirm the connection there") {
+		t.Errorf("output: %s", out)
+	}
+	if !strings.Contains(b.sshFragment(), "Host bulkhead-web") {
+		t.Errorf("ssh entries:\n%s", b.sshFragment())
+	}
+
+	// On macOS open is waited for: it says when nothing takes the link.
+	b.goos, b.opened = "darwin", nil
+	b.ok("open", "web", "--in", "claude")
+	if !slices.Equal(b.tools, []string{"open " + link}) || len(b.opened) != 0 {
+		t.Errorf("on macOS: tools = %v, opened = %v", b.tools, b.opened)
+	}
+
+	if err := b.fails(2, "open", "web", "--in", "emacs"); !strings.Contains(err, "neither vscode nor claude") {
+		t.Errorf("another program: %s", err)
+	}
+	if err := b.fails(2, "open", "--in", "claude"); !strings.Contains(err, "usage: bh open <env> [--in vscode|claude]") {
+		t.Errorf("no environment: %s", err)
+	}
+}
+
+func TestClaudeLinkEscapesWhatItCarries(t *testing.T) {
+	if got, want := claudeLink("dev@build.example.com", "~/my project"), "claude://code/new?ssh_host=dev%40build.example.com&ssh_folder=~/my%20project"; got != want {
+		t.Errorf("link = %s, want %s", got, want)
+	}
+}
+
+// The full-screen interface offers Claude Desktop where it can be found.
+func TestClaudeDesktopIsLookedForOnMacOS(t *testing.T) {
+	b := newBench(t)
+	a := &app{goos: "linux", getenv: func(string) string { return b.home }}
+	if a.hasClaude() {
+		t.Error("offered on Linux")
+	}
+	a.goos = "darwin"
+	if err := os.MkdirAll(filepath.Join(b.home, "Applications", "Claude.app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !a.hasClaude() {
+		t.Error("not found in ~/Applications")
+	}
+}
+
 func TestDownAllStopsWhatRuns(t *testing.T) {
 	b := newBench(t)
 	b.ok("create", "web")

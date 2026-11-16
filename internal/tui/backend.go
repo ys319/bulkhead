@@ -85,6 +85,8 @@ type Address struct {
 type Backend interface {
 	Load(ctx context.Context) (Snapshot, error)
 	HasVSCode() bool
+	// HasClaude: the Claude desktop app is there to hand an environment to.
+	HasClaude() bool
 
 	Create(name, from string) error
 	Rename(name, newName string) error
@@ -98,7 +100,10 @@ type Backend interface {
 	Destroy(ctx context.Context, name string) error
 	Configure(ctx context.Context, name string, changes config.Changes) error
 	RunInit(ctx context.Context, name string, progress io.Writer) error
-	Open(ctx context.Context, name string) error
+	Open(ctx context.Context, name string) error // in VS Code
+	// OpenInClaude hands the environment to the Claude desktop app, which
+	// asks before it connects.
+	OpenInClaude(ctx context.Context, name string) error
 
 	AddRemote(name, host string, port int) error
 	ConfigureRemote(name string, host *string, port *int) error
