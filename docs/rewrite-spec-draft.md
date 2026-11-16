@@ -630,7 +630,9 @@ v2.110.0 以降 — それより前は SSH の指定を無視して新規セッ�
 - 渡し方: macOS は `open <リンク>` を待つ（引き受けるアプリが無いと失敗が返る）。Windows は
   `rundll32 url.dll,FileProtocolHandler`、ほかは `xdg-open` を起動するだけで、失敗は分からない。
 - TUI の「Open in Claude」は、アプリがありそうなときだけ出す: macOS は `/Applications` か
-  `~/Applications` に `Claude.app` があるとき、Windows は常に（誰が `claude://` を引き受けるかは
+  `~/Applications` と、その中のフォルダ（3段下まで。Homebrew の `--appdir` などで下の階層に
+  入れている場合のため。`.app` の中と隠しフォルダは見ない。リンクはたどる）に `Claude.app` が
+  あるとき。TUI を開いている間に1度だけ探す。Windows は常に（誰が `claude://` を引き受けるかは
   レジストリを見ないと分からない）、ほかは出さない。CLI はどこでも試す。
 
 ## 10. 配布

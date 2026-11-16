@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ys319/bulkhead/internal/config"
@@ -33,12 +34,17 @@ func (a *app) interactive(ctx context.Context) error {
 	// moment (bh logs, started from the menu), and the interface must still
 	// be there when that program is gone. At the keyboard of the interface
 	// itself Ctrl-C is a key.
-	return a.fullScreen(context.WithoutCancel(ctx), backend{a})
+	return a.fullScreen(context.WithoutCancel(ctx), backend{a: a, claude: sync.OnceValue(a.hasClaude)})
 }
 
 // backend is what the full-screen interface acts through: the same
 // functions as the commands, with their output caught instead of printed.
-type backend struct{ a *app }
+type backend struct {
+	a *app
+	// claude: the Claude desktop app is there. Looked for once — the menu
+	// asks every time it is drawn, and the answer takes reading folders.
+	claude func() bool
+}
 
 // quiet is the app with its output going to w.
 func (b backend) quiet(w io.Writer) *app {
@@ -105,7 +111,7 @@ func (b backend) Load(ctx context.Context) (tui.Snapshot, error) {
 }
 
 func (b backend) HasVSCode() bool { return b.a.hasVSCode() }
-func (b backend) HasClaude() bool { return b.a.hasClaude() }
+func (b backend) HasClaude() bool { return b.claude() }
 
 func (b backend) Create(name, from string) error {
 	_, _, err := b.quiet(io.Discard).newLocal(name, from, nil)

@@ -345,12 +345,46 @@ func TestClaudeDesktopIsLookedForOnMacOS(t *testing.T) {
 	if a.hasClaude() {
 		t.Error("offered on Linux")
 	}
-	a.goos = "darwin"
-	if err := os.MkdirAll(filepath.Join(b.home, "Applications", "Claude.app"), 0o755); err != nil {
+	// Where Homebrew was told to put its applications, a folder down.
+	if err := os.MkdirAll(filepath.Join(b.home, "Applications", "Homebrew", "Claude.app"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	a = &app{goos: "darwin", getenv: func(string) string { return b.home }}
 	if !a.hasClaude() {
-		t.Error("not found in ~/Applications")
+		t.Error("not found in a folder of ~/Applications")
+	}
+}
+
+func TestApplicationsAreLookedForInFoldersButNotInBundles(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{
+		"Editor.app/Contents/Helpers/Claude.app", // part of another application
+		"a/b/c/d/Claude.app",                     // further down than anybody files applications
+		".hidden/Claude.app",
+		"Tools/Linked",
+		"../Elsewhere/Claude.app",
+	} {
+		if err := os.MkdirAll(filepath.Join(root, "Applications", dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apps := filepath.Join(root, "Applications")
+	if err := os.WriteFile(filepath.Join(apps, "Claude.app.zip"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	folders := []string{filepath.Join(root, "missing"), apps}
+	if appInstalled(folders, "Claude.app", 3) {
+		t.Error("found where no application is installed")
+	}
+	// A link to the application, in a folder: as the package managers leave it.
+	if err := os.Symlink(filepath.Join(root, "Elsewhere", "Claude.app"), filepath.Join(apps, "Tools", "Linked", "Claude.app")); err != nil {
+		t.Fatal(err)
+	}
+	if !appInstalled(folders, "Claude.app", 3) {
+		t.Error("not found two folders down, through a link")
+	}
+	if appInstalled(folders, "Claude.app", 1) {
+		t.Error("found further down than asked for")
 	}
 }
 

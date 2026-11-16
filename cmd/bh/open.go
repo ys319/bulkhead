@@ -33,20 +33,50 @@ func (a *app) hasVSCode() bool {
 // be told without asking the desktop. It decides only whether the
 // full-screen interface offers it: `bh open --in claude` tries regardless.
 //
-// On macOS the application is looked for where applications are put. On
-// Windows nothing short of the registry says who takes claude:// links, so
-// it is offered; elsewhere it is not.
+// On macOS the application is looked for where Launchpad finds
+// applications: the Applications folders of the machine and of the user,
+// and the folders in them (Homebrew can be told to put its applications in
+// one). On Windows nothing short of the registry says who takes claude://
+// links, so it is offered; elsewhere it is not.
 func (a *app) hasClaude() bool {
 	switch a.goos {
 	case "darwin":
-		for _, dir := range []string{"/Applications", filepath.Join(a.getenv("HOME"), "Applications")} {
-			if _, err := os.Stat(filepath.Join(dir, "Claude.app")); err == nil {
-				return true
-			}
-		}
-		return false
+		roots := []string{"/Applications", filepath.Join(a.getenv("HOME"), "Applications")}
+		return appInstalled(roots, "Claude.app", 3)
 	case "windows":
 		return true
+	}
+	return false
+}
+
+// appInstalled looks for an application bundle in the folders and, up to
+// depth levels down, in the folders inside them. Bundles are not looked
+// into: what is inside an application is not an installed application.
+func appInstalled(folders []string, bundle string, depth int) bool {
+	for _, folder := range folders {
+		entries, err := os.ReadDir(folder)
+		if err != nil {
+			continue // not there, or not ours to read
+		}
+		var inside []string
+		for _, entry := range entries {
+			path := filepath.Join(folder, entry.Name())
+			// Stat, not the entry's own type: a link to an application
+			// or to a folder of them counts as what it points at.
+			info, err := os.Stat(path)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			if entry.Name() == bundle {
+				return true
+			}
+			if !strings.HasSuffix(entry.Name(), ".app") && !strings.HasPrefix(entry.Name(), ".") {
+				inside = append(inside, path)
+			}
+		}
+		if depth > 0 && appInstalled(inside, bundle, depth-1) {
+			return true
+		}
 	}
 	return false
 }
