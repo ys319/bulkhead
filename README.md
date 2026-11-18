@@ -22,7 +22,19 @@ written in Japanese. MIT licensed.
 
 ## 導入
 
-配布物（単体のバイナリ）はまだ無い。手元でビルドする:
+単体のバイナリを [Releases](https://github.com/ys319/bulkhead/releases) に置く
+（`bh-windows-amd64.exe` / `bh-windows-arm64.exe` / `bh-darwin-arm64` / `bh-darwin-amd64` /
+`bh-linux-amd64` / `bh-linux-arm64`）。落として `bh`（Windows は `bh.exe`）の名前で PATH の
+通った場所へ置く。ほかに置くものは無い。
+
+```
+gh attestation verify bh-windows-amd64.exe --repo ys319/bulkhead   # このリポジトリの release.yaml が作ったもの
+```
+
+バイナリには署名が無い — ブラウザで落とすと、Windows は「発行元不明」、macOS は開けない旨の
+警告を出す。
+
+**最初のリリースはまだ出していない。** それまでは手元でビルドする:
 
 ```
 nix build                 # result/bin/bh（Nix がある場合）

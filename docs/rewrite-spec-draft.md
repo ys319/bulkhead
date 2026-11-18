@@ -642,7 +642,8 @@ v2.110.0 以降 — それより前は SSH の指定を無視して新規セッ�
 - `containers/` は埋め込み、イメージのタグを資産のハッシュにする。bh を更新すると次の up で
   新しいイメージが作られ、古いイメージのまま動いている環境は doctor が warn で示す
   （TS 版の「ビルドと checkout のずれの警告」と bh-guest の版の確認がこれに置き換わる）。
-- 署名・公証（macOS / Windows）、自己更新、パッケージマネージャ対応は未決（最初は入れない）。
+- 署名・公証（macOS / Windows）は最初は入れない — 入れるときの形は下の「署名を入れるとき」。
+  自己更新、パッケージマネージャ対応は未決。
 - **Nix の flake からも入れられる**（2026-11-15 — 自分のマシンへ home-manager で配るため）:
   `packages.<system>.default`。ビルドに git の checkout が無いので、コミットは flake が
   `-X main.commit=` で渡す（`bh version` に出る）。zsh / bash の補完をパッケージに入れる
@@ -651,6 +652,99 @@ v2.110.0 以降 — それより前は SSH の指定を無視して新規セッ�
   補完を確かめた。**macOS では `nix build` を一度も試していない** — ビルド中に走るテスト
   （`cmd/bh`）も Mac では初めて動く。
 - **ビルドの経路が残る課題**（§12-2）。イメージのビルドだけは API 直が重い。
+
+### GitHub Actions（2026-11-18 — **書いただけで、一度も走らせていない**）
+
+`.github/workflows/` に2本。
+
+- **`ci.yaml`** — main への push と PR で、`go vet` と `go test` を Windows / macOS / Linux の
+  3つで走らせる（Windows と macOS でテストが動くのはこれが初めて）。gofmt と `go mod verify` は
+  Linux だけ。
+- **`release.yaml`** — タグ `vX.Y.Z` の push で、6つのバイナリ（`bh-<os>-<arch>`、Windows は
+  `.exe`）と `SHA256SUMS` を付けた**下書きのリリース**を作る。公開は人が画面から行う。
+  `-` を含むタグ（`v0.1.0-rc.1`）はプレリリースになる。
+
+ジョブは「できること」で分けてある:
+
+| ジョブ | すること | 権限 |
+| --- | --- | --- |
+| `test` | `ci.yaml` をそのまま呼ぶ。通らないコミットからは出さない | 読むだけ |
+| `build` | `scripts/build-release.sh` | 読むだけ |
+| `release` | `SHA256SUMS` の照合 → 来歴の証明（artifact attestation）→ 下書きのリリース | リリースを書く・証明に署名する |
+
+依存のコードに Go のツールチェーンをかけるジョブは、公開や署名に使えるものを何も持たない。
+公開できるジョブは、このリポジトリのコードを1行も実行しない（成果物を受け取るだけ）。
+
+- **ビルドは1か所**: `scripts/build-release.sh <版>` が、cgo なし・`-trimpath`・
+  `-buildvcs=false` で6つを作り、版とコミットを `-X` で渡す。ワークフローも手元も同じ
+  スクリプトを使う。同じマシンで2回作ってハッシュが一致することは確認した。
+- **Go は upstream のもの**: go.mod の `toolchain go1.26.10` を `actions/setup-go` が読む
+  （devShell と同じ版に揃えた。上げるのは依存を上げるのと同じ手順 — §15）。**devShell の Go
+  （nixpkgs のビルド）で作ったものは配布物と一致しない** — nixpkgs のパッチで、Linux と macOS
+  向けのバイナリに `/nix/store/…-iana-etc` などのパスが埋まる（Windows 向けには埋まらない）。
+  これまで手で渡していた `dist/` のバイナリがそうだった。配布物を作り直して突き合わせるときは、
+  go.dev の Go 1.26.10 でスクリプトを動かす。nixpkgs の `GOTOOLCHAIN=local` の下では toolchain
+  の行は無視されるので、flake のビルドには影響しない（`vendorHash` も変わらない）。
+- **アクション**は GitHub のもの（`actions/*`）だけで、コミットの SHA で固定した。
+  setup-go は前日に出た v7.1.0 を避けて v7.0.0（§15-B の待機）。リリースの作成は
+  ランナーに入っている `gh` で行い、外のアクションを足していない。キャッシュは使わない
+  （前の実行のものを配布物に入れない）。
+- **確かめ方**（利用者）: `gh attestation verify bh-windows-amd64.exe --repo ys319/bulkhead`
+  が「このリポジトリの release.yaml が、このコミットから作った」ことを示す。`SHA256SUMS` は
+  同じリリースに置いてあるだけなので、落とし損ねの検出にしかならない。
+
+**リポジトリの設定（持ち主の操作 — まだ）**:
+
+- Actions: 使えるアクションを GitHub のものだけに絞る。`GITHUB_TOKEN` の既定を読み取りだけに。
+- タグ `v*` を保護する（作れる人を絞り、消す・付け替えるを禁じる）。リリースの差し替えを
+  禁じる設定（immutable releases）。
+- Socket の GitHub App（§12-7）。
+
+### 署名を入れるとき（見通し — 証明書はまだ無い）
+
+署名は `build` と `release` の間に、**OS ごとの独立したジョブ**として入れる。成果物を受け取り、
+自分の OS のファイルに署名して次へ渡すだけで、ほかのジョブは動かさない。証明書（または
+署名サービスへの権限）は、そのジョブだけが使える environment に置き、実行のたびに承認を
+求める設定にする。
+
+**Windows（Authenticode）**
+
+- 得られるもの: ブラウザで落としたときの「発行元不明」の警告と、ウイルス対策の誤検知が減る。
+  **資格情報の守りは変わらない** — Windows の資格情報マネージャーは、同じ利用者のどの
+  プログラムからも読める（署名で絞る仕組みが無い）。
+- 2023年から、コード署名の証明書は秘密鍵をハードウェア（HSM）に置くことが求められる。
+  `.pfx` を Actions の secret に置く昔のやり方は、新しく取る証明書ではできない。クラウドの
+  署名サービス（Microsoft の Trusted Signing、OSS 向けの SignPath Foundation、認証局の HSM）
+  を使うことになる。個人で使えるか・費用は、入れるときに確かめる。
+- ワークフローからは、長く生きる secret でなく OIDC でサービスへ入る形にしたい。
+
+**macOS（Developer ID での署名と公証）**
+
+- Apple Developer Program（年会費）の Developer ID Application 証明書で `codesign`
+  （`--options runtime --timestamp`、識別子は `io.github.ys319.bulkhead` — ラベルの接頭辞と同じ）、
+  zip にして `notarytool` で公証。単体のバイナリには公証の結果を貼り付けられない（staple
+  できない）ので、初回の実行時に Gatekeeper がオンラインで確かめる。macOS のランナーで行う。
+- **キーチェーンを署名で守るには、署名だけでは足りない。** 3つ要る:
+  1. **変わらない身元**: Developer ID と固定の識別子。いまの arm64 のバイナリはリンカが付ける
+     その場限りの署名（ad-hoc）で、ビルドのたびに別物として扱われる。
+  2. **bh 自身がキーチェーンの API を呼ぶ**: いまは `/usr/bin/security` 越しなので、項目を
+     読めるのは「`security` コマンド」 — つまり誰でも（§7）。Security.framework を直接呼ぶ
+     ように `internal/vault` の macOS 側を差し替える（`vault.Store` の裏なので、ほかは動かない）。
+     cgo で呼ぶなら macOS 向けのビルドは macOS のランナーへ移る（Linux からのクロスビルドを
+     やめる）。cgo なしで動的に呼ぶライブラリを使えばクロスビルドのまま — 依存が1つ増える。
+     どちらでもジョブの分け方は変わらない。
+  3. **既にある項目の移し替え**: `security` が作った項目は `security` から読めるままなので、
+     bh が読んで作り直す。
+- **Nix で入れた bh には署名が無い**（各自のマシンでビルドするため）。署名つきの配布物が
+  作った項目を、Nix 版は「別のプログラム」として読むことになる（確認のダイアログが出るか、
+  読めない）。自分のマシンへ home-manager で配っているので、ここは決めることになる:
+  flake のパッケージを「署名つきの配布物を取ってくる」形にするか、Nix 版はいまの方式のままに
+  するか。
+- 署名したファイルは、作り直したものとハッシュが一致しない（署名が入る）。突き合わせは
+  署名を外してから（`codesign --remove-signature`）か、署名前のハッシュも公開して行う。
+
+いま決めておけること: 識別子（`io.github.ys319.bulkhead`）と、ジョブを分けた形。それ以外は
+証明書を取ると決めてからでよい。
 
 ## 11. TS 版からの移行
 
@@ -989,6 +1083,7 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | events (手) | TUI を開いたまま別の端末で `bh up` / `bh down` → 一覧が追従する |
 | migrate (済) | **2026-11-15 に通過**（ユーザー — Mac で1件を移して確かめた後、残りの全環境を続けて移行。この開発用の環境も移行済み。`verify-migrate.sh` を使ったかは聞いていない）。以下は、そのとき確かめたかが分からないもの |
 | migrate (手) | **TS 版が実際に作った環境**の移行を `scripts/verify-migrate.sh` の before / after で（§11）。dev.Dockerfile・トークン・init.sh を持つ環境、止まっている環境、`--undo` して TS 版で起動し直せること。スクリプト自体も本物の Docker では初めて動く |
+| GitHub Actions (手) | **一度も走らせていない**（actionlint 1.7.12 と shellcheck が通ること、スクリプトが手元で6つを作ること、Windows / macOS 向けに `go vet` が通る＝テストがコンパイルできることまで）。push して `ci` が3つの OS で通ること — **Windows と macOS でテストが動くのは初めてなので、落ちるものがある見込み**（パスの区切り、ファイルのモード、改行、シンボリックリンク）。タグを打って下書きのリリースに6つのバイナリと `SHA256SUMS` が付くこと、`gh attestation verify` が通ること、`bh version` に版とコミットが出ること。落とした Windows のバイナリが動くこと |
 | Windows (手) | named pipe への接続、`init.sh` の bind（ドライブレターつきのパス。doctor の照合も）、root-shell、TUI |
 | スナップショット (手) | TUI の Snapshot / Roll back / Archive / Unarchive。大きな workspace での所要時間。アーカイブ時の GitHub トークンの失効（本物のトークンで） |
 | reset (手) | TUI の Reset の2段階 |
@@ -1126,9 +1221,12 @@ Go 1.26.11 で修正済み）。flake.lock の nixpkgs が新しい Go を持て
 
 - **再現できるビルド**: 同じコミットを手元の `nix build` で作り、配布物とハッシュを突き
   合わせる。CI が改ざんされても食い違いで分かる。同じマシンで作り直して一致することは
-  確認済み。**別のマシンや CI との一致は未確認。**
+  確認済み。**別のマシンや CI との一致は未確認。** 配布物は upstream の Go で作るので、
+  突き合わせは `nix build` でなく `scripts/build-release.sh` を upstream の Go で動かして行う
+  （§10 — nixpkgs の Go はパスを埋め込むので一致しない）。
 - 配布物に**来歴の証明**（どのコミットを・どのワークフローが作ったか）を付ける。GitHub の
-  artifact attestation と `gh attestation verify` を想定（機能の名前と設定は実装時に確認）。
+  artifact attestation（`actions/attest-build-provenance`）と `gh attestation verify` —
+  `release.yaml` に入れた（§10。**未実行**）。公開リポジトリなので追加の費用は無い。
 - リリース後の差し替えを禁じる設定、タグと main の保護、アカウントの2要素認証（パスキー）。
 - 配布物に入っている依存の版は `go version -m` で読める。govulncheck は配布物も走査できる。
 

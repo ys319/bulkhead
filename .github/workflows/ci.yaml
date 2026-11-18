@@ -1,0 +1,62 @@
+# Tests on the three systems bh runs on. Also called by release.yaml: nothing
+# is released from a commit that does not pass here.
+#
+# Actions are pinned to a commit (the comment says which release it is), and
+# a release younger than a week is not taken — docs/rewrite-spec-draft.md §15.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows first: nothing else here has ever run the tests on it.
+        os: [windows-2025, macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod # the toolchain line
+          cache: false
+      - run: go version
+      - run: go vet ./...
+      - run: go test ./...
+
+  format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd internal containers)
+          if [ -n "$unformatted" ]; then
+            echo "not formatted with gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go.mod and go.sum are complete
+        run: go mod verify && go build -mod=readonly ./...
