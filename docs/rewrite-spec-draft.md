@@ -656,7 +656,7 @@ v2.110.0 以降 — それより前は SSH の指定を無視して新規セッ�
 ### GitHub Actions（2026-11-18）
 
 `ci` は 2026-11-18 に3つの OS で通った（3回目で。1・2回目に落ちたものは下）。
-`release` の結果は §13 の表。
+`release` は v0.1.0 で通り、同日に公開した（確かめたことは §13 の表）。
 
 `.github/workflows/` に2本。
 
@@ -684,7 +684,8 @@ v2.110.0 以降 — それより前は SSH の指定を無視して新規セッ�
 - **Go は upstream のもの**: go.mod の `toolchain go1.26.10` を `actions/setup-go` が読む
   （devShell と同じ版に揃えた。上げるのは依存を上げるのと同じ手順 — §15）。**devShell の Go
   （nixpkgs のビルド）で作ったものは配布物と一致しない** — nixpkgs のパッチで、Linux と macOS
-  向けのバイナリに `/nix/store/…-iana-etc` などのパスが埋まる（Windows 向けには埋まらない）。
+  向けのバイナリに `/nix/store/…-iana-etc` などのパスが埋まる（Windows 向けにはパスは埋まらないが、
+  バイトは一致しなかった）。
   これまで手で渡していた `dist/` のバイナリがそうだった。配布物を作り直して突き合わせるときは、
   go.dev の Go 1.26.10 でスクリプトを動かす。nixpkgs の `GOTOOLCHAIN=local` の下では toolchain
   の行は無視されるので、flake のビルドには影響しない（`vendorHash` も変わらない）。
@@ -1087,7 +1088,8 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | migrate (済) | **2026-11-15 に通過**（ユーザー — Mac で1件を移して確かめた後、残りの全環境を続けて移行。この開発用の環境も移行済み。`verify-migrate.sh` を使ったかは聞いていない）。以下は、そのとき確かめたかが分からないもの |
 | migrate (手) | **TS 版が実際に作った環境**の移行を `scripts/verify-migrate.sh` の before / after で（§11）。dev.Dockerfile・トークン・init.sh を持つ環境、止まっている環境、`--undo` して TS 版で起動し直せること。スクリプト自体も本物の Docker では初めて動く |
 | GitHub Actions (済) | `ci` が Windows / macOS / Linux で通った（2026-11-18、`1f0b551`）。**Windows と macOS でテストが動いたのは初めて。** 見つかったもの: macOS の bash 3.2 で補完が語を1つにつなげていた（不具合。直した）/ Windows のテストがファイルのモードを検査していた（Windows ではどのファイルも 0666 に見える。bh 本体は元から Windows でモードを見ない — テストが Linux のふりをして Windows のファイルを見ていた。`internal/filemode.Kept` に寄せた） |
-| リリース (手) | タグを打って下書きのリリースに6つのバイナリと `SHA256SUMS` が付くこと、`gh attestation verify` が通ること、`bh version` に版とコミットが出ること。落とした Windows のバイナリが実機で動くこと |
+| リリース (済) | **v0.1.0 を 2026-11-18 に公開**（タグは `9ad2522`）。下書きに6つのバイナリと `SHA256SUMS` が付いた / 落として `sha256sum --check` が通る / 6つとも `gh attestation verify --signer-workflow …/release.yaml --source-ref refs/tags/v0.1.0` が通り、関係のないファイルは落ちる / 落とした linux-arm64 が `bh 0.1.0 (9ad2522, linux/arm64)` と名乗る / `/nix/store` のパスは入っていない / 公開後に `releases/latest/download/…` から同じファイルが落ちる |
+| リリース (手) | **落とした Windows のバイナリが実機で動くこと**（CI で通ったのは偽の Engine のテストまで — この表の Windows の行）。upstream の Go 1.26.10 で作り直して配布物とハッシュが一致すること（devShell の Go で作ったものは、Windows 向けも含めて一致しなかった — 見込みどおり）。リポジトリの設定（アクションの制限、タグの保護、リリースの差し替え禁止 — いまは差し替えできる状態）は §10 |
 | Windows (手) | named pipe への接続、`init.sh` の bind（ドライブレターつきのパス。doctor の照合も）、root-shell、TUI |
 | スナップショット (手) | TUI の Snapshot / Roll back / Archive / Unarchive。大きな workspace での所要時間。アーカイブ時の GitHub トークンの失効（本物のトークンで） |
 | reset (手) | TUI の Reset の2段階 |
