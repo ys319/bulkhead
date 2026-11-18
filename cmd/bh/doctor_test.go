@@ -51,10 +51,15 @@ func TestDoctorPassesWhatBhCreated(t *testing.T) {
 	if bad := append(marked(out, " FAIL "), marked(out, " warn ")...); len(bad) > 0 {
 		t.Errorf("doctor complains about a fresh environment:\n%s", strings.Join(bad, "\n"))
 	}
+	// Where permission bits are not kept there is no mode to report.
+	key := "  ok   machine key is private (0600)"
+	if !filemode.Kept {
+		key = "  ok   machine key is in place"
+	}
 	for _, part := range []string{
 		"== machine ==\n", "== web ==\n", "doctor: no failures\n",
 		"  ok   Docker Engine 29.0.0",
-		"  ok   machine key is private (0600)",
+		key,
 		"  ok   ssh configuration includes bh's Host entries",
 		"  ok   holder is healthy: the egress filter passed its self-check",
 		"  ok   dev is in the holder's network namespace",
