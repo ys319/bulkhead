@@ -653,7 +653,10 @@ v2.110.0 以降 — それより前は SSH の指定を無視して新規セッ�
   （`cmd/bh`）も Mac では初めて動く。
 - **ビルドの経路が残る課題**（§12-2）。イメージのビルドだけは API 直が重い。
 
-### GitHub Actions（2026-11-18 — **書いただけで、一度も走らせていない**）
+### GitHub Actions（2026-11-18）
+
+`ci` は 2026-11-18 に3つの OS で通った（3回目で。1・2回目に落ちたものは下）。
+`release` の結果は §13 の表。
 
 `.github/workflows/` に2本。
 
@@ -1075,7 +1078,7 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | 上の修正 (手) | `bh open` が新しいウィンドウを開く / TUI の Logs から Ctrl-C で TUI へ戻る / 失敗した ssh の後で Enter を待つ / `HostKeyAlias` つきの項目で VS Code Remote SSH がつながる / メニューの幅 / 下段の並び（メッセージ → 操作説明） |
 | open --in claude (手) | **実機では未確認**（ここにはデスクトップが無い。リンクの形は公式文書の例と突き合わせただけ）。`bh open <env> --in claude` で Claude Desktop（v2.110.0 以降）に確認のダイアログが出て、`bulkhead-<env>` と `/home/developer/workspace` が入っていること / 既に同じ接続を登録しているときは「それを使うか」になること / つながること / TUI に「Open in Claude」が出ること / Claude Desktop が無い Mac で失敗が伝わること。Windows は未確認 |
 | 資格情報ストア (手) | ssh 越しなど使えない場所で「ファイルにする」案内が出ること。Windows・Linux は未確認（macOS のキーチェーンは 2026-11-13 に通過 — 上） |
-| 補完 (手) | `eval "$(bh completion zsh)"` で、`bh token set <env> ` の後にサービス、その後にプリセットが説明つきで弱い順に出る / `bh var unset <env> ` で変数名 / `bh rollback <env> ` でスナップショット。ここでは本物の zsh を擬似端末で動かして確かめた。PowerShell は Linux の pwsh 7.6.5 で `TabExpansion2` を呼んで確かめた（コマンド・サブコマンド・環境・サービス・プリセットの説明・フラグとその値・引用符つきの語）— **Windows と Windows PowerShell 5.1 では未確認**。bash は対話の bash 5.2.37（Linux）を擬似端末で動かして確かめた（コマンド・サブコマンド・環境・サービス・プリセットが弱い順・変数名・フラグとその値・ファイル名（空白入り、ディレクトリの中）・行の途中・候補が無い位置では何も出ない）— **macOS の bash 3.2 は未確認**（ここで 3.2 をビルドして試すのは止めた。`compopt` が無いので、順序はアルファベット順になり、ファイル名の空白のエスケープとディレクトリ末尾の `/` は付かない見込み。`/bin/bash` で `eval "$(bh completion bash)"` して `bh token set <env> github ` で Tab） |
+| 補完 (手) | `eval "$(bh completion zsh)"` で、`bh token set <env> ` の後にサービス、その後にプリセットが説明つきで弱い順に出る / `bh var unset <env> ` で変数名 / `bh rollback <env> ` でスナップショット。ここでは本物の zsh を擬似端末で動かして確かめた。PowerShell は Linux の pwsh 7.6.5 で `TabExpansion2` を呼んで確かめた（コマンド・サブコマンド・環境・サービス・プリセットの説明・フラグとその値・引用符つきの語）— **Windows と Windows PowerShell 5.1 では未確認**。bash は対話の bash 5.2.37（Linux）を擬似端末で動かして確かめた（コマンド・サブコマンド・環境・サービス・プリセットが弱い順・変数名・フラグとその値・ファイル名（空白入り、ディレクトリの中）・行の途中・候補が無い位置では何も出ない）— **macOS の bash 3.2**: 2026-11-18、CI の macOS で初めてスクリプトが 3.2 に当たり、**不具合が見つかった** — IFS に空白が無いと、3.2 は配列の一部（`"${COMP_WORDS[@]:1:COMP_CWORD}"`）を1語につなげてしまい、bh に語がまとめて1つで渡っていた。IFS を変える前に語を取り出すように直し、同じテスト（`TestBashScriptCarriesTheLineAndTheAnswer`）が macOS で通る。対話での見え方（`compopt` が無いので順序はアルファベット順、ファイル名の空白のエスケープとディレクトリ末尾の `/` は付かない見込み）は未確認 |
 | token (手) | **GitHub は 2026-11-14 に通過**（ユーザー、Mac — 本物のトークンを割り当て、`bh token refresh`、環境の中の `gh auth status`）。残り: `bh token remove` の失効、Hugging Face の種類の読み取りと失効（**Hugging Face の API は文書を読んだだけで、一度も呼んでいない**）、`gh run view --log` が `push` で通ること、期限が近いときの表示。前のビルドで設定したトークン（`github.json`）が読み替えられること |
 | GitHub トークン (手) | `revoke`、`destroy` 時の失効、git と gh から使えること。Windows のコンソールでの非表示入力 |
 | restart --rebuild (手) | `--pull --no-cache` で作り直され、コンテナが新しいイメージで起動する |
@@ -1083,7 +1086,8 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | events (手) | TUI を開いたまま別の端末で `bh up` / `bh down` → 一覧が追従する |
 | migrate (済) | **2026-11-15 に通過**（ユーザー — Mac で1件を移して確かめた後、残りの全環境を続けて移行。この開発用の環境も移行済み。`verify-migrate.sh` を使ったかは聞いていない）。以下は、そのとき確かめたかが分からないもの |
 | migrate (手) | **TS 版が実際に作った環境**の移行を `scripts/verify-migrate.sh` の before / after で（§11）。dev.Dockerfile・トークン・init.sh を持つ環境、止まっている環境、`--undo` して TS 版で起動し直せること。スクリプト自体も本物の Docker では初めて動く |
-| GitHub Actions (手) | **一度も走らせていない**（actionlint 1.7.12 と shellcheck が通ること、スクリプトが手元で6つを作ること、Windows / macOS 向けに `go vet` が通る＝テストがコンパイルできることまで）。push して `ci` が3つの OS で通ること — **Windows と macOS でテストが動くのは初めてなので、落ちるものがある見込み**（パスの区切り、ファイルのモード、改行、シンボリックリンク）。タグを打って下書きのリリースに6つのバイナリと `SHA256SUMS` が付くこと、`gh attestation verify` が通ること、`bh version` に版とコミットが出ること。落とした Windows のバイナリが動くこと |
+| GitHub Actions (済) | `ci` が Windows / macOS / Linux で通った（2026-11-18、`1f0b551`）。**Windows と macOS でテストが動いたのは初めて。** 見つかったもの: macOS の bash 3.2 で補完が語を1つにつなげていた（不具合。直した）/ Windows のテストがファイルのモードを検査していた（Windows ではどのファイルも 0666 に見える。bh 本体は元から Windows でモードを見ない — テストが Linux のふりをして Windows のファイルを見ていた。`internal/filemode.Kept` に寄せた） |
+| リリース (手) | タグを打って下書きのリリースに6つのバイナリと `SHA256SUMS` が付くこと、`gh attestation verify` が通ること、`bh version` に版とコミットが出ること。落とした Windows のバイナリが実機で動くこと |
 | Windows (手) | named pipe への接続、`init.sh` の bind（ドライブレターつきのパス。doctor の照合も）、root-shell、TUI |
 | スナップショット (手) | TUI の Snapshot / Roll back / Archive / Unarchive。大きな workspace での所要時間。アーカイブ時の GitHub トークンの失効（本物のトークンで） |
 | reset (手) | TUI の Reset の2段階 |

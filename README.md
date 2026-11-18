@@ -34,7 +34,7 @@ gh attestation verify bh-windows-amd64.exe --repo ys319/bulkhead   # このリ�
 バイナリには署名が無い — ブラウザで落とすと、Windows は「発行元不明」、macOS は開けない旨の
 警告を出す。
 
-**最初のリリースはまだ出していない。** それまでは手元でビルドする:
+手元でビルドする場合:
 
 ```
 nix build                 # result/bin/bh（Nix がある場合）
