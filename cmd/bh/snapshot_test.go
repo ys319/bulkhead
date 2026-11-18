@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ys319/bulkhead/internal/filemode"
 	"github.com/ys319/bulkhead/internal/snapshot"
 )
 
@@ -72,10 +73,10 @@ func TestSnapshotHoldsWorkspaceAndHomeWithoutWhatComesBack(t *testing.T) {
 		t.Fatalf("snapshots = %v", names)
 	}
 	path := filepath.Join(b.dir, "snapshots", id, names[0])
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(path); err != nil || (filemode.Kept && info.Mode().Perm() != 0o600) {
 		t.Errorf("the file: %v %v", info, err)
 	}
-	if info, err := os.Stat(filepath.Dir(path)); err != nil || info.Mode().Perm() != 0o700 {
+	if info, err := os.Stat(filepath.Dir(path)); err != nil || (filemode.Kept && info.Mode().Perm() != 0o700) {
 		t.Errorf("the directory: %v %v", info, err)
 	}
 	contents, err := snapshot.Verify(path)

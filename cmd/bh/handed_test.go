@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ys319/bulkhead/internal/config"
+	"github.com/ys319/bulkhead/internal/filemode"
 )
 
 const (
@@ -252,7 +253,7 @@ func TestSecretStoreIsChosenNotFallenBackOn(t *testing.T) {
 	b.ok("secret", "store", "file")
 	b.ok("secret", "set", "web", "API_KEY")
 	info, err := os.Stat(b.store().ValuesFile(id))
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || (filemode.Kept && info.Mode().Perm() != 0o600) {
 		t.Fatalf("the values file: %v %v", info, err)
 	}
 	if len(b.keychain) != 0 {

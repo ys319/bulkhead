@@ -14,6 +14,7 @@ import (
 
 	"github.com/ys319/bulkhead/internal/config"
 	"github.com/ys319/bulkhead/internal/engine/enginetest"
+	"github.com/ys319/bulkhead/internal/filemode"
 	"github.com/ys319/bulkhead/internal/plan"
 )
 
@@ -476,6 +477,9 @@ func TestDoctorChecksTheMachine(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if !filemode.Kept && strings.Contains(tt.want, " (0") {
+				t.Skip("permission bits are not kept on this system")
+			}
 			b, _, _ := doctorBench(t)
 			tt.damage(t, b)
 			code, out, _ := b.run("doctor")

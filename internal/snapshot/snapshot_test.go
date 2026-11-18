@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ys319/bulkhead/internal/filemode"
 )
 
 // entry is one member of a volume's tar stream.
@@ -121,7 +123,7 @@ func TestWhatGoesInComesOut(t *testing.T) {
 	if got := summary.Volumes["workspace"]; got.Entries != len(workspace) || got.Bytes != int64(len("package main\n")+1+len("long name")) {
 		t.Errorf("workspace summary = %+v", got)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(path); err != nil || (filemode.Kept && info.Mode().Perm() != 0o600) {
 		t.Errorf("the file: %v %v", info, err)
 	}
 	if _, err := os.Stat(path + ".partial"); err == nil {

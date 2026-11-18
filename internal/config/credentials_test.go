@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ys319/bulkhead/internal/filemode"
 )
 
 func TestNamesAndValues(t *testing.T) {
@@ -68,7 +70,7 @@ func TestTokensAndSecretsAreKeptWithoutValues(t *testing.T) {
 	}
 	for _, path := range []string{store.TokensFile("e1"), store.SecretsFile("e1")} {
 		info, err := os.Stat(path)
-		if err != nil || info.Mode().Perm() != 0o600 {
+		if err != nil || (filemode.Kept && info.Mode().Perm() != 0o600) {
 			t.Errorf("%s: %v %v", path, info, err)
 		}
 		data, _ := os.ReadFile(path)

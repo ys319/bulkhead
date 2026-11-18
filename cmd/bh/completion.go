@@ -602,9 +602,12 @@ const bashCompletion = `# bh completion (bash) — add to your ~/.bashrc:
 #   eval "$(bh completion bash)"
 
 _bh() {
+  # The words up to the cursor, taken while IFS still has its space: bash 3.2
+  # (macOS) makes one word of a slice of an array when it has none.
+  local -a words lines
+  words=("${COMP_WORDS[@]:1:COMP_CWORD}")
   local IFS=$'\n'
-  local -a lines
-  lines=($(command "${COMP_WORDS[0]}" __complete -- "${COMP_WORDS[@]:1:COMP_CWORD}" 2>/dev/null))
+  lines=($(command "${COMP_WORDS[0]}" __complete -- "${words[@]}" 2>/dev/null))
   COMPREPLY=()
   if [[ ${lines[0]} == __files__ ]]; then
     compopt -o filenames 2>/dev/null

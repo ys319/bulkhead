@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/zalando/go-keyring"
+
+	"github.com/ys319/bulkhead/internal/filemode"
 )
 
 func exercise(t *testing.T, store Store) {
@@ -48,7 +50,7 @@ func TestFile(t *testing.T) {
 	store := File{Path: path}
 	exercise(t, store)
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || (filemode.Kept && info.Mode().Perm() != 0o600) {
 		t.Fatalf("the file: %v %v", info, err)
 	}
 	// The last value takes the file with it: no empty file of secrets.

@@ -11,7 +11,6 @@ import (
 // ready is a machine with nothing to complain about.
 func ready() Machine {
 	return Machine{
-		GOOS:      "linux",
 		Engine:    &engine.Info{Version: "29.0.0", APIVersion: "1.52", OS: "linux", Arch: "arm64"},
 		DockerCLI: true, SSH: true, VSCode: true,
 		MachineKey:   File{Path: "/cfg/id_ed25519", Mode: 0o600},
@@ -56,7 +55,7 @@ func TestMachineChecks(t *testing.T) {
 		{"a key the group can read", func(m *Machine) { m.MachineKey.Mode = 0o640 }, Fail,
 			"the machine key is accessible to other users (0640) — chmod 600 /cfg/id_ed25519"},
 		// Windows has no mode bits; what Go reports there is not a finding.
-		{"a key on Windows", func(m *Machine) { m.GOOS, m.MachineKey.Mode = "windows", 0o666 }, OK, "machine key is in place"},
+		{"a key on Windows", func(m *Machine) { m.MachineKey.NoPermissions, m.MachineKey.Mode = true, 0o666 }, OK, "machine key is in place"},
 		{"a key that cannot be looked at", func(m *Machine) {
 			m.MachineKey = File{Path: "/cfg/id_ed25519", Err: fs.ErrPermission}
 		}, Fail, "the machine key cannot be looked at"},
@@ -71,7 +70,7 @@ func TestMachineChecks(t *testing.T) {
 		{"init.sh a directory", func(m *Machine) { m.InitScript.Mode = fs.ModeDir | 0o755 }, Fail, "/cfg/init.sh is not a file"},
 		{"init.sh closed to others", func(m *Machine) { m.InitScript.Mode = 0o700 }, Warn,
 			"init.sh is not readable by others (0700)"},
-		{"init.sh on Windows", func(m *Machine) { m.GOOS, m.InitScript.Mode = "windows", 0o600 }, OK, "init.sh is in place"},
+		{"init.sh on Windows", func(m *Machine) { m.InitScript.NoPermissions, m.InitScript.Mode = true, 0o600 }, OK, "init.sh is in place"},
 
 		{"no environments", func(m *Machine) {
 			m.Environments, m.Included, m.EntriesCurrent = 0, false, false

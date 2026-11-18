@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ys319/bulkhead/internal/config"
+	"github.com/ys319/bulkhead/internal/filemode"
 	"github.com/ys319/bulkhead/internal/sshkey"
 )
 
@@ -99,7 +100,7 @@ func TestMigrateTakesOverARunningEnvironment(t *testing.T) {
 	if len(oldKey) == 0 || string(oldKey) != string(newKey) {
 		t.Error("the machine key was not carried over")
 	}
-	if info, err := os.Stat(filepath.Join(b.dir, "id_ed25519")); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(filepath.Join(b.dir, "id_ed25519")); err != nil || (filemode.Kept && info.Mode().Perm() != 0o600) {
 		t.Errorf("the copied key's mode: %v", info.Mode().Perm())
 	}
 

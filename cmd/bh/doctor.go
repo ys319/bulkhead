@@ -15,6 +15,7 @@ import (
 	"github.com/ys319/bulkhead/internal/config"
 	"github.com/ys319/bulkhead/internal/doctor"
 	"github.com/ys319/bulkhead/internal/engine"
+	"github.com/ys319/bulkhead/internal/filemode"
 	"github.com/ys319/bulkhead/internal/plan"
 	"github.com/ys319/bulkhead/internal/sshconfig"
 )
@@ -156,7 +157,7 @@ func fileFact(path string) doctor.File {
 	if err != nil {
 		return doctor.File{Path: path, Err: err}
 	}
-	return doctor.File{Path: path, Mode: info.Mode()}
+	return doctor.File{Path: path, Mode: info.Mode(), NoPermissions: !filemode.Kept}
 }
 
 func (a *app) machineFacts(store config.Store, cfg *config.Config, info *engine.Info, engineErr error, keys int, keysErr error) doctor.Machine {
@@ -165,7 +166,6 @@ func (a *app) machineFacts(store config.Store, cfg *config.Config, info *engine.
 		return err == nil
 	}
 	facts := doctor.Machine{
-		GOOS:   a.goos,
 		Engine: info, EngineErr: engineErr,
 		DockerCLI: inPath("docker"), SSH: inPath("ssh"), VSCode: a.hasVSCode(),
 		MachineKey: fileFact(store.MachineKey()), InitScript: fileFact(store.InitScript()),

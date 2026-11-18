@@ -12,14 +12,15 @@ import (
 type File struct {
 	Path string
 	Mode fs.FileMode
+	// NoPermissions: the mode's permission bits say nothing about who may
+	// read the file (Windows — filemode.Kept).
+	NoPermissions bool
 	// Err is why it could not be looked at; fs.ErrNotExist when it is not there.
 	Err error
 }
 
 // Machine is what the checks of this machine's setup look at.
 type Machine struct {
-	GOOS string
-
 	// Engine is the Docker Engine's answer; nil when it gave none, and
 	// EngineErr says why.
 	Engine    *engine.Info
@@ -106,7 +107,7 @@ func checkMachineKey(m Machine) Finding {
 		return warn("no machine key yet (the first bh up or bh key show makes it)")
 	case key.Err != nil:
 		return fail(fmt.Sprintf("the machine key cannot be looked at: %v", key.Err))
-	case m.GOOS == "windows":
+	case key.NoPermissions:
 		// No mode bits to check there.
 		return ok("machine key is in place")
 	case key.Mode.Perm()&0o077 != 0:
@@ -149,7 +150,7 @@ func checkInitScript(m Machine) Finding {
 		return fail(fmt.Sprintf("init.sh cannot be looked at: %v", script.Err))
 	case !script.Mode.IsRegular():
 		return fail(fmt.Sprintf("%s is not a file — dev containers mount it as their init script", script.Path))
-	case m.GOOS != "windows" && script.Mode.Perm()&0o004 == 0:
+	case !script.NoPermissions && script.Mode.Perm()&0o004 == 0:
 		// The developer user in the container is another uid on some hosts.
 		return warn(fmt.Sprintf("init.sh is not readable by others (%04o): the user in a container may not be able to run it — chmod o+r %s", script.Mode.Perm(), script.Path))
 	}

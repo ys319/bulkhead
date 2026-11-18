@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ys319/bulkhead/internal/filemode"
 )
 
 func read(t *testing.T, path string) string {
@@ -77,7 +79,7 @@ func TestEnsureIncludeTouchesOnlyItsBlock(t *testing.T) {
 		t.Errorf("config:\n%q", got)
 	}
 	// The file's own permissions are kept.
-	if info, _ := os.Stat(config); info.Mode().Perm() != 0o644 {
+	if info, _ := os.Stat(config); filemode.Kept && info.Mode().Perm() != 0o644 {
 		t.Errorf("mode = %v", info.Mode().Perm())
 	}
 

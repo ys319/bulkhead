@@ -12,6 +12,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 
 	"github.com/ys319/bulkhead/internal/config"
+	"github.com/ys319/bulkhead/internal/filemode"
 	"github.com/ys319/bulkhead/internal/image"
 	"github.com/ys319/bulkhead/internal/plan"
 )
@@ -43,7 +44,7 @@ func TestUpHandsInInitScriptAndCredentialVolumes(t *testing.T) {
 	if err != nil || !strings.HasPrefix(string(data), "#!/usr/bin/env zsh") {
 		t.Fatalf("init.sh: %v\n%s", err, data)
 	}
-	if info, _ := os.Stat(script); info.Mode().Perm()&0o005 != 0o005 {
+	if info, _ := os.Stat(script); filemode.Kept && info.Mode().Perm()&0o005 != 0o005 {
 		t.Errorf("init.sh is not readable by the container's user: %v", info.Mode().Perm())
 	}
 	os.WriteFile(script, []byte("echo mine\n"), 0o755)

@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/ys319/bulkhead/internal/filemode"
 )
 
 func TestFingerprintMatchesSSHKeygen(t *testing.T) {
@@ -35,7 +37,7 @@ func TestEnsureMachineKeyGeneratesOnceAndKeepsIt(t *testing.T) {
 	if !regexp.MustCompile(`^ssh-ed25519 \S+ bulkhead$`).MatchString(first) {
 		t.Errorf("public key line = %q", first)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(path); err != nil || (filemode.Kept && info.Mode().Perm() != 0o600) {
 		t.Errorf("private key: %v, mode %v, want 0600", err, info.Mode().Perm())
 	}
 	private, _ := os.ReadFile(path)
