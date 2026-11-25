@@ -1182,7 +1182,8 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | --- | --- |
 | 上の修正 (手) | `bh open` が新しいウィンドウを開く / TUI の Logs から Ctrl-C で TUI へ戻る / 失敗した ssh の後で Enter を待つ / `HostKeyAlias` つきの項目で VS Code Remote SSH がつながる / メニューの幅 / 下段の並び（メッセージ → 操作説明） |
 | open --in claude (手) | **実機では未確認**（ここにはデスクトップが無い。リンクの形は公式文書の例と突き合わせただけ）。`bh open <env> --in claude` で Claude Desktop（v2.110.0 以降）に確認のダイアログが出て、`bulkhead-<env>` と `/home/developer/workspace` が入っていること / 既に同じ接続を登録しているときは「それを使うか」になること / つながること / TUI に「Open in Claude」が出ること / Claude Desktop が無い Mac で失敗が伝わること。Windows は未確認 |
-| shm-size (手) | **実機では未確認**（偽の Engine で `HostConfig.ShmSize` が渡ることまで）。前のビルドで作った環境に `bh up` → dev が作り直され、中で `df -h /dev/shm` が 8.0G を示すこと / `bh settings --shm-size 16g` の後、doctor が warn を出し、`bh restart <env>` で 16G になること / holder は 64M のまま / Docker Desktop の VM のメモリより大きい値でも起動すること（上限なので通る見込み） / TUI の Settings → Shared memory |
+| shm-size (済) | **2026-11-25 に通過**（ユーザー、Mac）: TUI の Reboot の後、環境の中の `df` で `/dev/shm` が増えているのを確認 |
+| shm-size (手) | 確かめたかが分からないもの: `bh settings --shm-size 16g` の後、doctor が warn を出し、`bh restart <env>` で 16G になること / holder は 64M のまま / Docker Desktop の VM のメモリより大きい値でも起動すること（上限なので通る見込み） / TUI の Settings → Shared memory |
 | forward (済・ここで) | 2026-11-25、この開発環境で **本物の ssh と、作業用に立てた sshd**（bulkhead の環境そのものではない）に対して: `bh forward run` で両方向（`18080:18081` と `host:18082:18083`）に HTTP が通る / 同じ待ち受けの2本目は ssh の失敗で終わる / `save` がそのまま開く / 開いている間 `bh forward list` と `bh list` に出る / 同じ組の2本目は「別の bh」で断られる / bh だけに SIGTERM を送ると ssh も止まり、ポートが閉じる / TUI を開いている間だけ通る / TUI を2つ開くと片方が転送し、それを閉じると5秒以内にもう片方が引き継ぐ / 全部閉じると ssh が残らない |
 | forward (済) | **逆方向（`host:`）が本物の環境で通った**（2026-11-25、ユーザー、Mac）: このマシンの Docker が公開しているポート（API のゲートウェイ）へ、環境の中の `curl localhost:<ポート>` が届き、ゲートウェイの応答が返った。holder のフィルタには掛からない — 見込みどおり |
 | forward (手) | **実機では未確認**: 環境 → このマシンの向き（`3000`、`8080:80`）/ remote の環境 / macOS の ssh と `flock` / TUI の Forwards メニューと詳細の表示、`⇄` / 環境を止めたとき TUI の転送が止まり、起動で戻ること / **Windows**（`LockFileEx`、`ssh.exe` を止める経路 — CI は偽の ssh まで）/ 端末を閉じたとき（SIGHUP）に ssh が残らないこと |
@@ -1209,6 +1210,15 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
   発行し直す流れが要る。いまは `bh github set` を最初からやり直すしかない。§6・§7 の再設計と
   一緒に決める。
 
+
+**文言の調整（2026-11-25、利用者の指摘 — まだ手を付けていない）**: コンテナを作り直す操作の
+呼び名が揃っていない。TUI のメニューは **Reboot**、CLI のコマンドは **restart**、メッセージと
+doctor は **recreate / created again**（「the next bh up web recreates it」「once its dev container
+is created again (bh restart <env>)」など）。同じ画面の中でも、TUI の Shared memory は
+「after its next Reboot」と言い、同じことを CLI は「created again」と言う。Reboot か recreate の
+どちらかに統一する。決めるときに見るもの: TUI の Reboot の確認文は「Recreate the containers
+and start again?」で、両方の語が1つのダイアログに出ている / `bh restart` というコマンド名を
+変えるかどうか（変えるなら補完・ヘルプ・README も）。
 
 残り: `prune` / `--json`（形を決めてから — TS 版の形は compose の座標を
 含んでいて、そのままは移せない）/ Releases への自動ビルド / §6・§7 の再設計 / ビルドの経路の
