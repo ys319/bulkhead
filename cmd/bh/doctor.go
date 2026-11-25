@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,12 +94,12 @@ func (a *app) diagnose(ctx context.Context, ref string) ([]doctor.Section, error
 	}}
 	for _, env := range envs {
 		if !env.Local() {
-			sections = append(sections, doctor.Section{Title: env.Name, Findings: doctor.CheckRemote()})
+			sections = append(sections, doctor.Section{Title: env.Name, Findings: append(doctor.CheckRemote(), forwardFindings(store, env)...)})
 			continue
 		}
 		sections = append(sections, doctor.Section{
 			Title:    env.Name,
-			Findings: checkEnvironment(ctx, eng, store, env, registry, registryErr),
+			Findings: append(checkEnvironment(ctx, eng, store, env, registry, registryErr), forwardFindings(store, env)...),
 		})
 	}
 	// With a name, Find has already stopped at a broken environment.
@@ -129,6 +130,33 @@ func checkEnvironment(ctx context.Context, eng dockerEngine, store config.Store,
 		}
 	}
 	return append(doctor.CheckLocal(facts), tokenFindings(store, env, time.Now())...)
+}
+
+// forwardFindings say which saved forwards let the environment reach this
+// machine, and whether a bh has them open now. It is what the user set
+// up, so it is no warning — but it is a way out of the environment, and
+// doctor is where those are listed.
+func forwardFindings(store config.Store, env config.Environment) []doctor.Finding {
+	var out []doctor.Finding
+	for _, state := range forwardStates(store, env) {
+		var ports []string
+		for _, port := range state.Ports {
+			if port.FromHost {
+				ports = append(ports, strconv.Itoa(port.Host))
+			}
+		}
+		if len(ports) == 0 {
+			continue
+		}
+		when := "while they are open (they are not now)"
+		if state.Held {
+			when = "and they are open now"
+		}
+		out = append(out, doctor.Finding{Level: doctor.OK, Message: fmt.Sprintf(
+			"the forwards %q let the environment reach this machine's port %s, %s — bh forward list %s",
+			state.Name, strings.Join(ports, ", "), when, env.Name)})
+	}
+	return out
 }
 
 // tokenFindings say which tokens of the environment are about to expire or

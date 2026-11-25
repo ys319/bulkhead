@@ -36,7 +36,7 @@ func main() {
 	a := &app{
 		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
 		getenv: os.Getenv, goos: runtime.GOOS, program: filepath.Base(os.Args[0]),
-		dial: dialEngine, ssh: systemSSH, builder: engine.CLIBuilder{},
+		dial: dialEngine, ssh: systemSSH, tunnel: systemTunnel, builder: engine.CLIBuilder{},
 		tool: runTool, lookPath: exec.LookPath, isTerminal: stdinIsTerminal, rawTerminal: rawTerminal, fullScreen: tui.Run,
 		osVault: func(prefix string) vault.Store { return vault.OS{Prefix: prefix} }, probeVault: vault.Probe,
 		httpClient: newHTTPClient(), openURL: openInBrowser, readSecret: readHiddenLine, now: time.Now,
@@ -80,7 +80,11 @@ type app struct {
 	// dial connects to the engine; the returned function disconnects.
 	dial func(getenv func(string) string) (dockerEngine, func(), error)
 	// ssh runs the ssh client on the terminal and returns its exit code.
-	ssh     func(args []string) (int, error)
+	ssh func(args []string) (int, error)
+	// tunnel runs the ssh client for a connection that only carries ports:
+	// nothing is typed into it, what it says goes to output, and it is
+	// stopped when ctx ends.
+	tunnel  func(ctx context.Context, args []string, output io.Writer) (int, error)
 	builder image.Builder
 	// tool runs a program of the host (code, ssh-keygen) and returns its output.
 	tool func(name string, args []string) (string, error)
@@ -145,6 +149,10 @@ const usageText = `usage: bh [command] [arguments]
   open <env> [--in vscode|claude]
                       open it in VS Code, or (--in claude) hand it to the
                       Claude desktop app as an SSH session to confirm there
+  forward run | save | on | off | remove | list
+                      carry ports between this machine and an environment,
+                      either way, while it runs: bh forward run web 3000
+                      host:8000 (bh forward for details)
   key show | list | add | rename | remove | attach | detach
                       this machine's key, and other keys that may log in
                       (bh key for details)
@@ -223,6 +231,7 @@ func (a *app) run(ctx context.Context, args []string) int {
 		"status":     a.status,
 		"ssh":        a.sshInto,
 		"open":       a.open,
+		"forward":    a.forward,
 		"key":        a.key,
 		"remote":     a.remote,
 		"logs":       a.logs,
@@ -350,6 +359,36 @@ func systemSSH(args []string) (int, error) {
 	switch {
 	case err == nil:
 		return 0, nil
+	case errors.As(err, &exit):
+		return exit.ExitCode(), nil
+	case errors.Is(err, exec.ErrNotFound):
+		return 0, errors.New("the ssh client was not found in PATH")
+	default:
+		return 0, err
+	}
+}
+
+// systemTunnel runs the ssh client until it ends, or until ctx does: then
+// it is stopped, so that no forward outlives the bh that opened it.
+func systemTunnel(ctx context.Context, args []string, output io.Writer) (int, error) {
+	command := exec.CommandContext(ctx, "ssh", args...)
+	command.Stdout, command.Stderr = output, output
+	// Asked to end first; killed if it has not after a moment. Windows has
+	// no way to ask.
+	command.Cancel = func() error {
+		if runtime.GOOS == "windows" {
+			return command.Process.Kill()
+		}
+		return command.Process.Signal(os.Interrupt)
+	}
+	command.WaitDelay = 3 * time.Second
+	err := command.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return 0, nil
+	case ctx.Err() != nil:
+		return 0, nil // stopped by us
 	case errors.As(err, &exit):
 		return exit.ExitCode(), nil
 	case errors.Is(err, exec.ErrNotFound):

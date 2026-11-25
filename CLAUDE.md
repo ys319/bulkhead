@@ -6,7 +6,7 @@ TS 版は隣の `../bulkhead-ts/`（退避済み。仕様・ADR・脅威モデ�
 - 仕様案: [docs/rewrite-spec-draft.md](docs/rewrite-spec-draft.md) — 決定・未決（§12）・進め方と
   **実機で未確認のもの**（§13）。
 - いまあるもの: 引数なしの TUI と、`create` / `configure` / `rename` / `up` / `down` /
-  `restart` / `list` / `status` / `ssh` / `open` / `logs` / `init` / `root-shell` / `key` /
+  `restart` / `list` / `status` / `ssh` / `open` / `forward` / `logs` / `init` / `root-shell` / `key` /
   `remote` / `gpu` / `settings` / `var` / `secret` / `token` / `doctor` / `completion` / `path` /
   `snapshot` / `rollback` / `export` / `import` / `archive` / `unarchive` / `reset` / `destroy` /
   `migrate` / `version`。まだ無いもの（`prune`、`--json`）は仕様案 §13。
@@ -25,6 +25,8 @@ TS 版は隣の `../bulkhead-ts/`（退避済み。仕様・ADR・脅威モデ�
   - `internal/image` — 埋め込んだ `containers/` と環境の dev.Dockerfile からイメージを用意。
   - `internal/sshkey` / `internal/sshconfig` — マシン鍵とフィンガープリント / `~/.ssh` の
     `Host bulkhead-<name>` と Include 行。
+  - `internal/forward` — ポート転送の書き方（Docker と同じ `このマシン:環境`、`host:` で逆方向）・
+    ssh に渡す引数・名前つきの組のロック。local と remote を区別しない。
   - `internal/snapshot` — スナップショットのファイル形式（読み書きと検証）。
   - `internal/vault` — secret と token の値の置き場（OS の資格情報ストア、またはファイル）。
   - `internal/github` / `internal/huggingface` — token を出すサービスごとの知識（発行ページ・

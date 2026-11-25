@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/ys319/bulkhead/internal/config"
+	"github.com/ys319/bulkhead/internal/forward"
 )
 
 // The menus. Names follow one rule: what opens another screen is a noun,
@@ -51,6 +52,98 @@ func (m *Model) choose(r row) tea.Cmd {
 	case rowMachineKey:
 		return m.showMachineKey()
 	}
+	return nil
+}
+
+// forwardsMenu: the ports saved to be carried between this machine and
+// the environment. The ones that are on are open while this interface is.
+func (m *Model) forwardsMenu(id string) *menu {
+	note := []string{
+		"Ports carried between this machine and the environment while this interface is open (or bh forward run is).",
+		"Written as Docker writes them — this machine's port, then the environment's: 3000, 8080:80. With host: in front, a port of this machine for the environment: host:8000.",
+	}
+	return &menu{name: "Forwards", note: note, build: func(m *Model) []item {
+		state := m.env(id)
+		if state == nil {
+			return nil
+		}
+		name := state.Env.Name
+		var items []item
+		for _, saved := range state.Forwards {
+			value := "off"
+			if saved.On {
+				value = "on"
+			}
+			items = append(items, item{label: sanitize(saved.Name), value: value + " · " + fit(saved.Ports, 40), run: func(m *Model) tea.Cmd {
+				m.push(m.forwardMenu(id, saved.Name))
+				return nil
+			}})
+		}
+		return append(items, item{label: "+ Add forwards", run: func(m *Model) tea.Cmd {
+			m.push(&input{name: "Add forwards", prompt: []string{"A name for them (for example api):"},
+				submit: func(m *Model, value string) (tea.Cmd, error) {
+					set := strings.TrimSpace(value)
+					if err := forward.CheckName(set); err != nil {
+						return nil, err
+					}
+					m.pop()
+					return m.askForwardPorts(name, set, ""), nil
+				}})
+			return nil
+		}})
+	}}
+}
+
+// forwardMenu: one saved set.
+func (m *Model) forwardMenu(id, set string) *menu {
+	return &menu{name: set, build: func(m *Model) []item {
+		state := m.env(id)
+		if state == nil {
+			return nil
+		}
+		name := state.Env.Name
+		for _, saved := range state.Forwards {
+			if saved.Name != set {
+				continue
+			}
+			turn := item{label: "Switch on", run: func(m *Model) tea.Cmd {
+				return m.do("Saving", "", true, func(io.Writer) error { return m.backend.SwitchForward(name, set, true) })
+			}}
+			if saved.On {
+				turn = item{label: "Switch off", run: func(m *Model) tea.Cmd {
+					return m.do("Saving", "", true, func(io.Writer) error { return m.backend.SwitchForward(name, set, false) })
+				}}
+			}
+			return []item{turn,
+				{label: "Change the ports", value: fit(saved.Ports, 40), run: func(m *Model) tea.Cmd { return m.askForwardPorts(name, set, saved.Ports) }},
+				{label: "Remove", color: yellow, run: func(m *Model) tea.Cmd {
+					return m.do("Removing "+set, fmt.Sprintf("removed %q from %q", set, name), false, func(io.Writer) error {
+						return m.backend.RemoveForward(name, set)
+					})
+				}},
+			}
+		}
+		return nil
+	}}
+}
+
+// askForwardPorts asks for the ports of a set and saves it, switched on.
+func (m *Model) askForwardPorts(name, set, current string) tea.Cmd {
+	m.push(&input{name: set, value: []rune(current),
+		prompt: []string{"The ports, with spaces between (3000 8080:80 host:8000):"},
+		submit: func(m *Model, value string) (tea.Cmd, error) {
+			ports, err := forward.ParseAll(strings.Fields(value))
+			if err != nil {
+				return nil, err
+			}
+			if len(ports) == 0 {
+				return nil, errors.New("at least one port")
+			}
+			m.pop()
+			return m.do("Saving "+set, fmt.Sprintf("%q is saved and on: %s", set, strings.Join(forward.Strings(ports), " ")), true, func(io.Writer) error {
+				return m.backend.SaveForward(name, set, value)
+			}), nil
+		}})
 	return nil
 }
 
@@ -205,6 +298,7 @@ func (m *Model) settingsMenu(id, name string) *menu {
 			{label: "Runtime", run: func(m *Model) tea.Cmd { m.push(m.runtimeForm(id)); return nil }},
 			{label: "SSH", run: func(m *Model) tea.Cmd { m.push(m.sshMenu(id)); return nil }},
 			// What is handed in needs no restart: new shells see it at once.
+			{label: "Forwards", run: func(m *Model) tea.Cmd { m.push(m.forwardsMenu(id)); return nil }},
 			{label: "Variables", run: func(m *Model) tea.Cmd { m.push(m.variablesMenu(id)); return nil }},
 			{label: "Secrets", run: func(m *Model) tea.Cmd { m.push(m.secretsMenu(id)); return nil }},
 			{label: "Tokens", run: func(m *Model) tea.Cmd { m.push(m.tokensMenu(id)); return nil }},
@@ -565,6 +659,7 @@ func (m *Model) remoteMenu(id, name string) *menu {
 					}})
 				return nil
 			}},
+			item{label: "Forwards", run: func(m *Model) tea.Cmd { m.push(m.forwardsMenu(id)); return nil }},
 			item{label: "Rename", run: func(m *Model) tea.Cmd { m.push(m.askRename(env.Name)); return nil }},
 			separator,
 			// Only the pointer goes, and adding it again brings it back:

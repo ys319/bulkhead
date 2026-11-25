@@ -3,6 +3,7 @@
 //
 //	<dir>/bulkhead.json                 marks the directory and holds its id
 //	<dir>/settings.json                 what holds for all environments (once set)
+//	<dir>/run/<id>/forward-<name>.lock  held by the bh that has those forwards open
 //	<dir>/environments/<id>/env.json    one environment's settings
 //	<dir>/id_ed25519[.pub]              the machine's ssh key
 //	<dir>/keys.json                     registered public keys
@@ -84,6 +85,13 @@ func (s Store) SnapshotsDir(id string) string { return filepath.Join(s.Dir, "sna
 
 // SnapshotsRoot holds the snapshot directories of all environments.
 func (s Store) SnapshotsRoot() string { return filepath.Join(s.Dir, "snapshots") }
+
+// ForwardLock is the file whose lock says that a bh has the environment's
+// saved forwards of that name open. It is not in the environment's own
+// directory, which is the build context of its dev.Dockerfile.
+func (s Store) ForwardLock(id, name string) string {
+	return filepath.Join(s.Dir, "run", id, "forward-"+name+".lock")
+}
 
 // MachineKey is the private half of the machine's ssh key.
 func (s Store) MachineKey() string { return filepath.Join(s.Dir, "id_ed25519") }
@@ -247,6 +255,10 @@ func (s Store) SaveEnvironment(env Environment) error {
 func (s Store) RemoveEnvironment(id string) error {
 	if !ValidID(id) {
 		return fmt.Errorf("%q is not a valid environment id", id)
+	}
+	// The locks of its forwards: files that mean nothing without it.
+	if err := os.RemoveAll(filepath.Join(s.Dir, "run", id)); err != nil {
+		return err
 	}
 	return os.RemoveAll(s.EnvDir(id))
 }

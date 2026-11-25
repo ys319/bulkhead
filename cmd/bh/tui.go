@@ -18,6 +18,7 @@ import (
 
 	"github.com/ys319/bulkhead/internal/config"
 	"github.com/ys319/bulkhead/internal/engine"
+	"github.com/ys319/bulkhead/internal/forward"
 	"github.com/ys319/bulkhead/internal/ops"
 	"github.com/ys319/bulkhead/internal/plan"
 	"github.com/ys319/bulkhead/internal/snapshot"
@@ -34,7 +35,20 @@ func (a *app) interactive(ctx context.Context) error {
 	// moment (bh logs, started from the menu), and the interface must still
 	// be there when that program is gone. At the keyboard of the interface
 	// itself Ctrl-C is a key.
-	return a.fullScreen(context.WithoutCancel(ctx), backend{a: a, claude: sync.OnceValue(a.hasClaude)})
+	ctx = context.WithoutCancel(ctx)
+	ui := backend{a: a, claude: sync.OnceValue(a.hasClaude)}
+	// Saved forwards that are on are open for as long as the interface is.
+	if store, err := a.store(); err == nil {
+		ui.forwards = newForwarder(ctx, a, store)
+		defer ui.forwards.close()
+		seen := ""
+		if cfg, err := store.Load(); err == nil {
+			seen = forwardsSeen(cfg)
+		}
+		ui.forwards.done.Add(1)
+		go ui.forwards.watchSettings(seen)
+	}
+	return a.fullScreen(ctx, ui)
 }
 
 // backend is what the full-screen interface acts through: the same
@@ -44,6 +58,8 @@ type backend struct {
 	// claude: the Claude desktop app is there. Looked for once — the menu
 	// asks every time it is drawn, and the answer takes reading folders.
 	claude func() bool
+	// forwards carries the saved forwards that are on; nil carries none.
+	forwards *forwarder
 }
 
 // quiet is the app with its output going to w.
@@ -63,6 +79,14 @@ func (b backend) Load(ctx context.Context) (tui.Snapshot, error) {
 		return tui.Snapshot{}, keysErr
 	}
 	snap := tui.Snapshot{Broken: cfg.Broken, Keys: keys}
+	// What should be carried now: decided here, where every environment's
+	// settings and state are read anyway.
+	var wants []forwardWant
+	defer func() {
+		if b.forwards != nil {
+			b.forwards.sync(wants)
+		}
+	}()
 	if settings, err := store.LoadSettings(); err != nil {
 		snap.SettingsProblem = err.Error()
 	} else {
@@ -109,6 +133,23 @@ func (b backend) Load(ctx context.Context) (tui.Snapshot, error) {
 					state.Secrets = append(state.Secrets, secret.Name)
 				}
 			}
+		}
+		// A local environment is reached while its dev container runs;
+		// whether a remote one is cannot be seen from here, so it is tried.
+		reachable := !env.Local() || (env.Archived == "" && state.Known && state.Status.Dev != nil && state.Status.Dev.Running())
+		for _, saved := range forwardStates(store, env) {
+			shown := tui.Forward{Name: saved.Name, On: saved.On, Ports: saved.Summary(), FromHost: forward.FromHost(saved.Ports)}
+			if saved.On && reachable && b.forwards != nil {
+				wants = append(wants, forwardWant{env, saved.Set})
+				shown.State, shown.Detail = b.forwards.state(env.ID, saved.Name)
+				if shown.State == "" {
+					shown.State = forwardConnecting // it starts with this reading
+				}
+			} else if saved.Held {
+				// Not ours to carry, and somebody does.
+				shown.State, shown.Detail = forwardElsewhere, forward.HeldBy(saved.Holder)
+			}
+			state.Forwards = append(state.Forwards, shown)
 		}
 		snap.Envs = append(snap.Envs, state)
 	}
@@ -159,6 +200,21 @@ func (b backend) Configure(ctx context.Context, name string, changes config.Chan
 
 func (b backend) SetShmSize(size string) error {
 	_, err := b.quiet(io.Discard).setShmSize(size)
+	return err
+}
+
+func (b backend) SaveForward(name, set, ports string) error {
+	_, _, _, err := b.quiet(io.Discard).saveForward(name, set, strings.Fields(ports))
+	return err
+}
+
+func (b backend) SwitchForward(name, set string, on bool) error {
+	_, err := b.quiet(io.Discard).switchForward(name, set, on)
+	return err
+}
+
+func (b backend) RemoveForward(name, set string) error {
+	_, err := b.quiet(io.Discard).removeForward(name, set)
 	return err
 }
 
@@ -415,7 +471,41 @@ func (b backend) TidyDevDockerfile(name string) (bool, error) {
 // Watch follows the engine's container events. When the connection breaks
 // it says so, tries again with growing pauses, and reports a change once it
 // is back — whatever happened meanwhile was missed.
+// Watch reports the changes of the containers and, with them, of the
+// forwards this bh carries.
 func (b backend) Watch(ctx context.Context) <-chan bool {
+	engine := b.watchEngine(ctx)
+	if b.forwards == nil {
+		return engine
+	}
+	out := make(chan bool)
+	go func() {
+		defer close(out)
+		// What the engine last said about itself goes with a change that
+		// is not the engine's.
+		connected := true
+		for {
+			select {
+			case ok, open := <-engine:
+				if !open {
+					return
+				}
+				connected = ok
+			case <-b.forwards.changed:
+			case <-ctx.Done():
+				return
+			}
+			select {
+			case out <- connected:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out
+}
+
+func (b backend) watchEngine(ctx context.Context) <-chan bool {
 	out := make(chan bool)
 	send := func(ok bool) bool {
 		select {

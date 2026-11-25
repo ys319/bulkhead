@@ -20,6 +20,7 @@ var errHelpAsked = errors.New("help asked for")
 // ownUsage are the commands that have a usage text of their own.
 var ownUsage = map[string]string{
 	"configure": configureUsage,
+	"forward":   forwardUsage,
 	"key":       keyUsage,
 	"remote":    remoteUsage,
 	"settings":  settingsUsage,

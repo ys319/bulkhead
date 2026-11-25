@@ -2,8 +2,12 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/ys319/bulkhead/internal/forward"
 )
 
 func TestSizesAreWrittenTheWayTheyAreRead(t *testing.T) {
@@ -90,5 +94,74 @@ func TestSettingsThatCannotBeReadAreRefused(t *testing.T) {
 	}
 	if settings, err := store.LoadSettings(); err != nil || settings != DefaultSettings() {
 		t.Errorf("only a version: %+v, %v", settings, err)
+	}
+}
+
+// Saved forwards are part of the settings of a local and of a remote
+// environment alike, written the way they are typed.
+func TestSavedForwardsAreKeptWithBothKindsOfEnvironment(t *testing.T) {
+	store := Store{Dir: t.TempDir()}
+	if _, err := store.Init(); err != nil {
+		t.Fatal(err)
+	}
+	sets := []forward.Set{
+		{Name: "api", On: true, Ports: []forward.Port{{Host: 8000, Env: 8000, FromHost: true}}},
+		{Name: "app", Ports: []forward.Port{{Host: 8080, Env: 80}, {Host: 3000, Env: 3000}}},
+	}
+	local := NewLocal("aaaaaaaaaaaa", "web", 22001)
+	remote := NewRemote("bbbbbbbbbbbb", "box", "studio.test", 22001)
+	local.Forwards, remote.Forwards = sets, sets
+	for _, env := range []Environment{local, remote} {
+		if err := store.SaveEnvironment(env); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := os.ReadFile(store.EnvFile(env.ID))
+		if !strings.Contains(string(data), `"host:8000"`) || !strings.Contains(string(data), `"8080:80"`) {
+			t.Errorf("%s env.json:\n%s", env.Name, data)
+		}
+	}
+	cfg, err := store.Load()
+	if err != nil || len(cfg.Broken) != 0 {
+		t.Fatalf("load: %v, broken %v", err, cfg.Broken)
+	}
+	for _, env := range cfg.Envs {
+		if !reflect.DeepEqual(env.Forwards, sets) {
+			t.Errorf("%s: %+v", env.Name, env.Forwards)
+		}
+	}
+	// An environment without any writes no field.
+	plain := NewLocal("cccccccccccc", "plain", 22002)
+	if err := store.SaveEnvironment(plain); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(store.EnvFile(plain.ID)); strings.Contains(string(data), "forwards") {
+		t.Errorf("env.json of an environment without forwards:\n%s", data)
+	}
+
+	for name, forwards := range map[string]string{
+		"a port that is none": `[{"name": "a", "on": true, "ports": ["web"]}]`,
+		"a name that is none": `[{"name": "3000", "on": true, "ports": ["3000"]}]`,
+		"no ports":            `[{"name": "a", "on": true, "ports": []}]`,
+		"a name twice":        `[{"name": "a", "on": true, "ports": ["1"]}, {"name": "a", "on": true, "ports": ["2"]}]`,
+		"an unknown field":    `[{"name": "a", "on": true, "ports": ["1"], "port": 1}]`,
+	} {
+		file := `{"version": 1, "name": "x", "type": "remote", "host": "h", "sshPort": 1, "forwards": ` + forwards + `}`
+		if _, err := ParseEnvironment([]byte(file)); err == nil {
+			t.Errorf("%s passed", name)
+		}
+	}
+	// Removing the environment takes the locks of its forwards along.
+	lock := store.ForwardLock(local.ID, "api")
+	if err := os.MkdirAll(filepath.Dir(lock), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lock, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveEnvironment(local.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Dir(lock)); err == nil {
+		t.Error("the locks outlived the environment")
 	}
 }

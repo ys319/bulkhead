@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/ys319/bulkhead/internal/forward"
 )
 
 // Environment types.
@@ -44,6 +46,12 @@ type Environment struct {
 
 	// Remote only.
 	Host string
+
+	// Forwards are the ports saved under a name to be carried between this
+	// machine and the environment (bh forward). They belong to the way
+	// this machine uses the environment, local or remote: nothing in the
+	// containers is made from them.
+	Forwards []forward.Set
 }
 
 // Local reports whether the environment runs on this machine's Docker.
@@ -133,6 +141,9 @@ func (e Environment) validate() error {
 	default:
 		add(`type: must be "local" or "remote"`)
 	}
+	if err := forward.CheckSets(e.Forwards); err != nil {
+		add("forwards: %v", err)
+	}
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "\n"))
 	}
@@ -156,6 +167,23 @@ type envFile struct {
 	DockerSocket   *bool              `json:"dockerSocket"`
 	Vars           *map[string]string `json:"vars"`
 	Archived       *string            `json:"archived"`
+	Forwards       *[]forwardFile     `json:"forwards"`
+}
+
+// forwardFile is a saved set of forwards as it is written: the ports the
+// way they are typed.
+type forwardFile struct {
+	Name  string   `json:"name"`
+	On    bool     `json:"on"`
+	Ports []string `json:"ports"`
+}
+
+func forwardFiles(sets []forward.Set) []forwardFile {
+	var out []forwardFile
+	for _, set := range sets {
+		out = append(out, forwardFile{Name: set.Name, On: set.On, Ports: forward.Strings(set.Ports)})
+	}
+	return out
 }
 
 // ParseEnvironment reads the contents of an env.json. The result has no ID:
@@ -261,6 +289,20 @@ func (raw envFile) environment() (Environment, error) {
 	}
 
 	var problems []string
+	if raw.Forwards != nil {
+		for _, saved := range *raw.Forwards {
+			set := forward.Set{Name: saved.Name, On: saved.On}
+			for _, text := range saved.Ports {
+				port, err := forward.Parse(text)
+				if err != nil {
+					problems = append(problems, fmt.Sprintf("forwards: %q: %v", saved.Name, err))
+					continue
+				}
+				set.Ports = append(set.Ports, port)
+			}
+			env.Forwards = append(env.Forwards, set)
+		}
+	}
 	if len(missing) > 0 {
 		problems = append(problems, "missing: "+strings.Join(missing, ", "))
 	}
@@ -293,6 +335,8 @@ type localFile struct {
 	Vars map[string]string `json:"vars,omitempty"`
 	// Only there while the environment is archived: not a setting to edit.
 	Archived string `json:"archived,omitempty"`
+	// Saved forwards (bh forward).
+	Forwards []forwardFile `json:"forwards,omitempty"`
 }
 
 type remoteFile struct {
@@ -301,13 +345,16 @@ type remoteFile struct {
 	Type    string `json:"type"`
 	Host    string `json:"host"`
 	SSHPort int    `json:"sshPort"`
+	// Saved forwards (bh forward).
+	Forwards []forwardFile `json:"forwards,omitempty"`
 }
 
 // file is the environment as it is written: every field stated, so the file
 // shows what can be edited.
 func (e Environment) file() any {
 	if e.Type == TypeRemote {
-		return remoteFile{Version: FormatVersion, Name: e.Name, Type: e.Type, Host: e.Host, SSHPort: e.SSHPort}
+		return remoteFile{Version: FormatVersion, Name: e.Name, Type: e.Type, Host: e.Host, SSHPort: e.SSHPort,
+			Forwards: forwardFiles(e.Forwards)}
 	}
 	return localFile{
 		Version: FormatVersion, Name: e.Name, Type: e.Type, SSHPort: e.SSHPort,
@@ -318,5 +365,6 @@ func (e Environment) file() any {
 		DockerSocket:   e.DockerSocket,
 		Vars:           e.Vars,
 		Archived:       e.Archived,
+		Forwards:       forwardFiles(e.Forwards),
 	}
 }

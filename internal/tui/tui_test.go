@@ -153,6 +153,41 @@ func (f *fake) SetShmSize(size string) error {
 	f.snap.ShmSize = size
 	return nil
 }
+func (f *fake) SaveForward(name, set, ports string) error {
+	if err := f.call("save-forward %s %s %s", name, set, ports); err != nil {
+		return err
+	}
+	state := f.find(name)
+	saved := Forward{Name: set, On: true, Ports: ports, State: "connecting"}
+	for i := range state.Forwards {
+		if state.Forwards[i].Name == set {
+			state.Forwards[i] = saved
+			return nil
+		}
+	}
+	state.Forwards = append(state.Forwards, saved)
+	return nil
+}
+func (f *fake) SwitchForward(name, set string, on bool) error {
+	if err := f.call("switch-forward %s %s %t", name, set, on); err != nil {
+		return err
+	}
+	state := f.find(name)
+	for i := range state.Forwards {
+		if state.Forwards[i].Name == set {
+			state.Forwards[i].On, state.Forwards[i].State = on, ""
+		}
+	}
+	return nil
+}
+func (f *fake) RemoveForward(name, set string) error {
+	if err := f.call("remove-forward %s %s", name, set); err != nil {
+		return err
+	}
+	state := f.find(name)
+	state.Forwards = slices.DeleteFunc(state.Forwards, func(saved Forward) bool { return saved.Name == set })
+	return nil
+}
 func (f *fake) RunInit(_ context.Context, name string, _ io.Writer) error {
 	return f.call("init %s", name)
 }
@@ -565,7 +600,7 @@ func TestEnvironmentMenuFollowsTheState(t *testing.T) {
 	}
 
 	s.press("esc", "esc").onto("box").press("enter")
-	if got, want := s.labels(), []string{"Open shell", "---", "Configure", "Rename", "---", "Remove"}; !slices.Equal(got, want) {
+	if got, want := s.labels(), []string{"Open shell", "---", "Configure", "Forwards", "Rename", "---", "Remove"}; !slices.Equal(got, want) {
 		t.Errorf("remote: %q", got)
 	}
 }
@@ -835,6 +870,80 @@ func TestSharedMemoryIsSetForAllEnvironments(t *testing.T) {
 	}
 }
 
+// Saved forwards are edited from an environment's settings — a remote
+// one's too — and what is being carried is in sight in the list and in
+// the details.
+func TestForwardsAreSavedSwitchedAndShown(t *testing.T) {
+	s := start(t)
+	s.onto("web").press("enter").pick("Settings").pick("Forwards")
+	if got, want := s.labels(), []string{"+ Add forwards"}; !slices.Equal(got, want) {
+		t.Fatalf("forwards of an environment without any: %q", got)
+	}
+	s.pick("+ Add forwards")
+	s.top().(*input).value = []rune("3000")
+	s.press("enter")
+	s.shows("starts with a letter")
+	s.top().(*input).value = []rune("api")
+	s.press("enter")
+	s.top().(*input).value = []rune("host:8000 8080>80")
+	s.press("enter")
+	s.shows("is not a port to forward")
+	s.top().(*input).value = []rune("host:8000  8080:80")
+	s.press("enter")
+	s.called("save-forward web api host:8000  8080:80")
+	if got, want := s.labels(), []string{"api", "+ Add forwards"}; !slices.Equal(got, want) {
+		t.Fatalf("after adding: %q", got)
+	}
+
+	s.pick("api")
+	if got, want := s.labels(), []string{"Switch off", "Change the ports", "Remove"}; !slices.Equal(got, want) {
+		t.Fatalf("a set that is on: %q", got)
+	}
+	s.pick("Switch off")
+	s.called("switch-forward web api false")
+	if got := s.labels(); got[0] != "Switch on" {
+		t.Errorf("a set that is off: %q", got)
+	}
+	s.pick("Change the ports")
+	if got := string(s.top().(*input).value); got != "host:8000  8080:80" {
+		t.Errorf("the ports to change start as %q", got)
+	}
+	s.top().(*input).value = []rune("host:8000")
+	s.press("enter")
+	s.called("save-forward web api host:8000")
+
+	// What is happening to them, as the backend reports it.
+	web := s.backend.find("web")
+	web.Forwards = []Forward{
+		{Name: "api", On: true, Ports: "host:8000", FromHost: true, State: "open"},
+		{Name: "app", On: true, Ports: "3000", State: "failed", Detail: "bind [127.0.0.1]:3000: Address already in use\nmore"},
+		{Name: "db", On: true, Ports: "host:5432", State: "elsewhere", Detail: "another bh (process 42)"},
+		{Name: "old", Ports: "9000"},
+	}
+	s.press("esc", "esc", "esc", "esc", "r").onto("web")
+	s.shows("web ⇄",
+		"forward: api open · host:8000",
+		"forward: app failed — bind [127.0.0.1]:3000: Address already in use",
+		"forward: db open in another bh (process 42) · host:5432",
+		"forward: old off · 9000")
+	// Nothing carried, no mark.
+	web.Forwards = web.Forwards[3:]
+	s.press("r")
+	if strings.Contains(s.text(), "⇄") {
+		t.Errorf("a mark without anything carried:\n%s", s.text())
+	}
+
+	// A remote environment has them too.
+	s.onto("box").press("enter").pick("Forwards").pick("+ Add forwards")
+	s.top().(*input).value = []rune("app")
+	s.press("enter")
+	s.top().(*input).value = []rune("3000")
+	s.press("enter")
+	s.called("save-forward box app 3000")
+	s.pick("app").pick("Remove")
+	s.called("remove-forward box app")
+}
+
 func TestShellOuts(t *testing.T) {
 	s := start(t)
 	s.onto("web").press("enter").pick("Open shell")
@@ -942,7 +1051,7 @@ func TestHumanBytes(t *testing.T) {
 func TestVariablesAndSecretsMenus(t *testing.T) {
 	s := start(t)
 	s.onto("web").press("enter").pick("Settings")
-	if got, want := s.labels(), []string{"Runtime", "SSH", "Variables", "Secrets", "Tokens"}; !slices.Equal(got, want) {
+	if got, want := s.labels(), []string{"Runtime", "SSH", "Forwards", "Variables", "Secrets", "Tokens"}; !slices.Equal(got, want) {
 		t.Errorf("settings: %q", got)
 	}
 

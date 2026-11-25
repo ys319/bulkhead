@@ -80,6 +80,9 @@ func (a *app) newLocal(name, from string, edit func(*config.Environment)) (confi
 		// The copy is a new environment with fresh volumes, whatever state
 		// the one it was copied from is in.
 		env.Archived = ""
+		// Saved forwards stay behind: two environments with the same ones
+		// would want the same ports of this machine.
+		env.Forwards = nil
 	}
 	if edit != nil {
 		edit(&env)

@@ -36,6 +36,23 @@ type EnvState struct {
 	Tokens       []Token
 	Secrets      []string
 	TokenProblem string
+	// Forwards are the ports saved to be carried between this machine and
+	// the environment.
+	Forwards []Forward
+}
+
+// Forward is saved forwards of one name, as they are now.
+type Forward struct {
+	Name  string
+	On    bool
+	Ports string // as they are written: "8080:80 host:8000"
+	// FromHost: some of them let the environment reach this machine.
+	FromHost bool
+	// State: "open" and "connecting" (this bh carries them), "elsewhere"
+	// (another bh does), "failed", or "" (nobody does). Detail says who
+	// or why.
+	State  string
+	Detail string
 }
 
 // Token is a credential handed to an environment.
@@ -108,6 +125,12 @@ type Backend interface {
 	// (512m, 16g). An environment has it once its dev container is created
 	// again.
 	SetShmSize(size string) error
+	// Saved forwards (bh forward): ports is what is typed, several ports
+	// with spaces between. While the interface is open it carries the ones
+	// that are on.
+	SaveForward(name, set, ports string) error
+	SwitchForward(name, set string, on bool) error
+	RemoveForward(name, set string) error
 	RunInit(ctx context.Context, name string, progress io.Writer) error
 	Open(ctx context.Context, name string) error // in VS Code
 	// OpenInClaude hands the environment to the Claude desktop app, which

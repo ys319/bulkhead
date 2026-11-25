@@ -247,6 +247,19 @@ func keyNames(attached bool) argument {
 	}
 }
 
+// forwardNames are the saved forwards of the environment.
+func forwardNames(c *completing) []candidate {
+	_, env, found := c.of()
+	if !found {
+		return nil
+	}
+	out := make([]candidate, len(env.Forwards))
+	for i, set := range env.Forwards {
+		out[i] = candidate{set.Name, set.Summary()}
+	}
+	return out
+}
+
 // flagSpec is a flag. takes is true for one that is followed by a value;
 // values makes the candidates for that value (nil: anything goes).
 type flagSpec struct {
@@ -317,6 +330,17 @@ var completedCommands = []commandSpec{
 	{name: "ssh", about: "open a shell, or run a command", args: []argument{anyEnvs}},
 	{name: "open", about: "open in VS Code or the Claude desktop app", args: []argument{anyEnvs},
 		flags: []flagSpec{valued("--in", oneOf(inVSCode, inClaude))}},
+	{name: "forward", about: "carry ports between this machine and an environment", subs: []commandSpec{
+		// A run takes names and ports in any number; names are offered for
+		// the first few words.
+		{name: "run", about: "carry ports until Ctrl-C", args: []argument{anyEnvs, forwardNames, forwardNames, forwardNames, forwardNames}},
+		{name: "save", about: "save ports under a name and open them", args: []argument{anyEnvs, forwardNames},
+			flags: []flagSpec{plain("--no-run")}},
+		{name: "on", about: "have run and the full-screen interface open it", args: []argument{anyEnvs, forwardNames}},
+		{name: "off", about: "open it only by name", args: []argument{anyEnvs, forwardNames}},
+		{name: "remove", about: "forget saved forwards", args: []argument{anyEnvs, forwardNames}},
+		{name: "list", about: "the saved forwards and whether they are open", args: []argument{anyEnvs}},
+	}},
 	{name: "key", about: "the machine key and other keys that may log in", subs: []commandSpec{
 		{name: "show", about: "print the public key of this machine"},
 		{name: "list", about: "the registered keys or those of an environment", args: []argument{localEnvs}},

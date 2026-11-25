@@ -457,8 +457,11 @@ func TestInterfaceOutlivesAnInterrupt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	alive := false
+	dir := t.TempDir()
 	a := &app{
 		isTerminal: func() bool { return true },
+		getenv:     func(key string) string { return map[string]string{"BH_CONFIG_DIR": dir}[key] },
+		goos:       "linux",
 		fullScreen: func(ctx context.Context, _ tui.Backend) error {
 			alive = ctx.Err() == nil
 			return nil

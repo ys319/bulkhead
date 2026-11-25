@@ -252,6 +252,7 @@ func (m *Model) localDetail(state EnvState, inner, rows int) []string {
 	if env.DockerSocket {
 		lines = append(lines, field(inner, "docker", paint(magenta, "host Docker socket mounted — not isolated"))...)
 	}
+	lines = append(lines, forwardLines(state, inner)...)
 	lines = append(lines, doctorLines(state.Findings, inner)...)
 	// The disk line is there in every state of the reading, so that nothing
 	// below it moves when the sizes arrive. It is absent only for an
@@ -324,9 +325,39 @@ func (m *Model) remoteDetail(state EnvState, inner int) []string {
 	default:
 		lines = append(lines, field(inner, "reach", paint(red, "failed")+" — "+sanitize(firstLine(reach.problem)))...)
 	}
+	lines = append(lines, forwardLines(state, inner)...)
 	lines = append(lines, bold("SSH"))
 	lines = append(lines, field(inner, "  address", address(state))...)
 	return append(lines, field(inner, "  alias", sshconfig.Alias(state.Env.Name))...)
+}
+
+// forwardLines are the saved forwards with what is happening to them: a
+// line each, near the top, because a port being carried is something to
+// see without looking for it.
+func forwardLines(state EnvState, inner int) []string {
+	var lines []string
+	for _, saved := range state.Forwards {
+		lines = append(lines, field(inner, "forward", sanitize(saved.Name)+" "+forwardState(saved)+dim(" · "+saved.Ports))...)
+	}
+	return lines
+}
+
+// forwardState words the state of saved forwards.
+func forwardState(saved Forward) string {
+	switch saved.State {
+	case "open":
+		return paint(green, "open")
+	case "connecting":
+		return dim("connecting...")
+	case "elsewhere":
+		return paint(green, "open") + dim(" in "+sanitize(saved.Detail))
+	case "failed":
+		return paint(red, "failed") + " — " + sanitize(firstLine(saved.Detail))
+	}
+	if saved.On {
+		return dim("on, not open")
+	}
+	return dim("off")
 }
 
 func (m *Model) keyDetail(selected row, inner int) []string {

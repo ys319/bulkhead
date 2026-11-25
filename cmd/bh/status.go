@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -77,10 +78,14 @@ func (a *app) list(ctx context.Context, args []string) error {
 				}
 			}
 		}
-		note := ""
+		var notes []string
 		if env.DockerSocket {
-			note = "docker socket (not isolated)"
+			notes = append(notes, "docker socket (not isolated)")
 		}
+		if forwarding := forwardNote(store, env); forwarding != "" {
+			notes = append(notes, forwarding)
+		}
+		note := strings.Join(notes, "; ")
 		fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", env.Name, state, sshAddress(env), note)
 	}
 	for _, broken := range cfg.Broken {
@@ -114,11 +119,19 @@ func (a *app) status(ctx context.Context, args []string) error {
 	}
 
 	row := func(key, value string) { fmt.Fprintf(a.stdout, "%-9s %s\n", key+":", value) }
+	// The saved forwards, last: what this machine and the environment are
+	// given of each other.
+	forwards := func() {
+		for _, state := range forwardStates(store, env) {
+			row("forward", fmt.Sprintf("%s (%s): %s", state.Name, state.label(), state.Summary()))
+		}
+	}
 	row("name", env.Name)
 	row("id", env.ID)
 	if !env.Local() {
 		row("type", "remote")
 		row("ssh", sshAddress(env))
+		forwards()
 		return nil
 	}
 
@@ -161,6 +174,7 @@ func (a *app) status(ctx context.Context, args []string) error {
 	}
 	row("holder", describe(current.Holder, time.Now()))
 	row("dev", describe(current.Dev, time.Now()))
+	forwards()
 	if current.State() == ops.StateDegraded {
 		fmt.Fprintf(a.stdout, "\nThe two containers do not add up to a working environment; bh up %s repairs it.\n", env.Name)
 	}

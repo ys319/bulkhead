@@ -32,6 +32,8 @@ type row struct {
 	id    string
 	label string
 	style style
+	// mark follows the label: ports of the environment are being carried.
+	mark string
 
 	env    *EnvState
 	broken *config.Broken
@@ -98,7 +100,7 @@ func buildRows(snap Snapshot, reach map[string]reachState) []row {
 	for i := range snap.Envs {
 		state := &snap.Envs[i]
 		if state.Env.Local() {
-			rows = append(rows, row{kind: rowEnv, id: "env:" + state.Env.ID, label: state.Env.Name, style: envStyle(*state, reachState{}), env: state})
+			rows = append(rows, row{kind: rowEnv, id: "env:" + state.Env.ID, label: state.Env.Name, mark: forwardMark(*state), style: envStyle(*state, reachState{}), env: state})
 		}
 	}
 	for i := range snap.Broken {
@@ -110,7 +112,7 @@ func buildRows(snap Snapshot, reach map[string]reachState) []row {
 	for i := range snap.Envs {
 		state := &snap.Envs[i]
 		if !state.Env.Local() {
-			rows = append(rows, row{kind: rowEnv, id: "env:" + state.Env.ID, label: state.Env.Name, style: envStyle(*state, reach[state.Env.ID]), env: state})
+			rows = append(rows, row{kind: rowEnv, id: "env:" + state.Env.ID, label: state.Env.Name, mark: forwardMark(*state), style: envStyle(*state, reach[state.Env.ID]), env: state})
 		}
 	}
 	rows = append(rows, row{kind: rowAddRemote, id: "add-remote", label: "+ Add remote environment"},
@@ -123,6 +125,17 @@ func buildRows(snap Snapshot, reach map[string]reachState) []row {
 		row{kind: rowBlank}, row{kind: rowHeading, label: "System"},
 		row{kind: rowSettings, id: "settings", label: "Settings"},
 		row{kind: rowMachineKey, id: "machine-key", label: "Machine key"})
+}
+
+// forwardMark is what follows an environment's name while ports of it are
+// being carried, by this bh or another: forwarding is always in sight.
+func forwardMark(state EnvState) string {
+	for _, saved := range state.Forwards {
+		if saved.State == "open" || saved.State == "elsewhere" {
+			return " ⇄"
+		}
+	}
+	return ""
 }
 
 // indexOf finds the row with the id; when it is gone, the first row that
@@ -209,9 +222,9 @@ func listLines(rows []row, cursor, inner, height int) []string {
 		case i == cursor:
 			chosen := r.style
 			chosen.bold = true
-			lines = append(lines, "❯ "+chosen.render(fit(r.label, inner-2)))
+			lines = append(lines, "❯ "+chosen.render(fit(r.label+r.mark, inner-2)))
 		default:
-			lines = append(lines, "  "+r.style.render(strings.TrimRight(fit(r.label, inner-2), " ")))
+			lines = append(lines, "  "+r.style.render(strings.TrimRight(fit(r.label+r.mark, inner-2), " ")))
 		}
 	}
 	if to < len(rows) {

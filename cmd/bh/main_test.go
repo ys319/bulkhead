@@ -36,20 +36,25 @@ type bench struct {
 	engine  *enginetest.Fake
 	sshArgs []string
 	sshExit int
-	dialErr error
-	stdin   string
-	legacy  string          // the TypeScript version's directory
-	home    string          // where ~/.ssh is
-	tools   []string        // programs of the host that were run, with their arguments
-	path    map[string]bool // programs in PATH
-	typing  bool            // stdin is a terminal
-	builder image.Builder   // nil: any build fails the test
-	raw     int             // how often the terminal was put in raw mode
-	web     *githubtest.Web // the services tokens come from; any other request fails the test
-	opened  []string        // addresses handed to the browser
-	goos    string          // the operating system bh believes it runs on (linux when empty)
-	secret  string          // what is pasted at a hidden prompt
-	now     time.Time       // the clock; zero for the real one
+	// tunnels are the ssh connections opened to carry ports; tunnel stands in
+	// for one (nil: it ends at once with tunnelExit).
+	tunnels    [][]string
+	tunnel     func(ctx context.Context, output io.Writer) (int, error)
+	tunnelExit int
+	dialErr    error
+	stdin      string
+	legacy     string          // the TypeScript version's directory
+	home       string          // where ~/.ssh is
+	tools      []string        // programs of the host that were run, with their arguments
+	path       map[string]bool // programs in PATH
+	typing     bool            // stdin is a terminal
+	builder    image.Builder   // nil: any build fails the test
+	raw        int             // how often the terminal was put in raw mode
+	web        *githubtest.Web // the services tokens come from; any other request fails the test
+	opened     []string        // addresses handed to the browser
+	goos       string          // the operating system bh believes it runs on (linux when empty)
+	secret     string          // what is pasted at a hidden prompt
+	now        time.Time       // the clock; zero for the real one
 	// keychain stands in for the credential store of the operating system,
 	// across the commands of a test; noKeychain makes it one that cannot
 	// be used (as over ssh).
@@ -102,6 +107,13 @@ func (b *bench) run(args ...string) (code int, stdout, stderr string) {
 		goos: cmp.Or(b.goos, "linux"),
 		dial: func(func(string) string) (dockerEngine, func(), error) {
 			return b.engine, func() {}, b.dialErr
+		},
+		tunnel: func(ctx context.Context, args []string, output io.Writer) (int, error) {
+			b.tunnels = append(b.tunnels, args)
+			if b.tunnel != nil {
+				return b.tunnel(ctx, output)
+			}
+			return b.tunnelExit, nil
 		},
 		ssh: func(args []string) (int, error) {
 			b.sshArgs = args
