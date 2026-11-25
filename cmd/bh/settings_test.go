@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ys319/bulkhead/internal/config"
+	"github.com/ys319/bulkhead/internal/plan"
 	"github.com/ys319/bulkhead/internal/sshkey"
 	"github.com/ys319/bulkhead/internal/tui"
 )
@@ -468,5 +469,115 @@ func TestInterfaceOutlivesAnInterrupt(t *testing.T) {
 	}
 	if !alive {
 		t.Error("the interface got a context that an interrupt ends")
+	}
+}
+
+// The size of /dev/shm is a setting of the machine: every environment's
+// dev container is created with it, and the holder is not.
+func TestShmSizeIsAMachineSettingThatReachesDev(t *testing.T) {
+	b := newBench(t)
+	if out := b.ok("settings"); out != "shm-size  8g\n" {
+		t.Errorf("settings before any was set: %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(b.dir, "settings.json")); err == nil {
+		t.Error("printing the settings wrote the file")
+	}
+
+	b.ok("create", "web")
+	b.ok("create", "api")
+	b.ok("up", "web")
+	web, api := b.env("web").ID, b.env("api").ID
+	if got := b.engine.Created[plan.DevName(web)].Host.ShmSize; got != 8<<30 {
+		t.Errorf("dev's /dev/shm without a setting = %d", got)
+	}
+	if got := b.engine.Created[plan.HolderName(web)].Host.ShmSize; got != 0 {
+		t.Errorf("the holder's /dev/shm = %d", got)
+	}
+
+	out := b.ok("settings", "--shm-size", "16G")
+	if !strings.Contains(out, "/dev/shm holds up to 16g") || !strings.Contains(out, "bh restart <env>") {
+		t.Errorf("output: %s", out)
+	}
+	if out := b.ok("settings"); out != "shm-size  16g\n" {
+		t.Errorf("settings: %q", out)
+	}
+	data, _ := os.ReadFile(filepath.Join(b.dir, "settings.json"))
+	if !strings.Contains(string(data), `"shmSize": "16g"`) {
+		t.Errorf("settings.json:\n%s", data)
+	}
+
+	// The container that exists has what it was created with, and doctor
+	// says so; an environment started from now on has the new size.
+	if got := b.engine.Created[plan.DevName(web)].Host.ShmSize; got != 8<<30 {
+		t.Errorf("a running dev changed: %d", got)
+	}
+	b.path["ssh"], b.path["docker"] = true, true
+	doctor := b.ok("doctor")
+	for _, part := range []string{
+		"  ok   an environment's /dev/shm holds up to 16g (bh settings)",
+		" warn  dev was created from other settings than the current ones — the next bh up web recreates it",
+	} {
+		if !strings.Contains(doctor, part) {
+			t.Errorf("doctor does not say %q:\n%s", part, doctor)
+		}
+	}
+	b.ok("up", "api")
+	if got := b.engine.Created[plan.DevName(api)].Host.ShmSize; got != 16<<30 {
+		t.Errorf("api's /dev/shm = %d", got)
+	}
+	// Only dev is replaced: the holder is not made from this setting.
+	b.engine.Calls = nil
+	b.ok("restart", "web")
+	if got := b.engine.Created[plan.DevName(web)].Host.ShmSize; got != 16<<30 {
+		t.Errorf("web's /dev/shm after a restart = %d", got)
+	}
+	if doctor := b.ok("doctor", "web"); strings.Contains(doctor, " warn ") {
+		t.Errorf("doctor after the restart:\n%s", doctor)
+	}
+}
+
+func TestSettingsRefuses(t *testing.T) {
+	b := newBench(t)
+	for _, size := range []string{"lots", "8", "8k", "32m", ""} {
+		if err := b.fails(2, "settings", "--shm-size", size); !strings.Contains(err, "--shm-size") {
+			t.Errorf("--shm-size %q: %s", size, err)
+		}
+	}
+	b.fails(2, "settings", "web")
+	if _, err := os.Stat(filepath.Join(b.dir, "settings.json")); err == nil {
+		t.Error("a refused size wrote the file")
+	}
+	if out := b.ok("settings", "--help"); !strings.Contains(out, "usage: bh settings") {
+		t.Errorf("help: %s", out)
+	}
+}
+
+// Settings that cannot be read stop an environment from starting: a dev
+// created with a guess would not be what the user set.
+func TestUnreadableSettingsStopUpAndAreNotOverwritten(t *testing.T) {
+	b := newBench(t)
+	b.ok("create", "web")
+	file := filepath.Join(b.dir, "settings.json")
+	broken := `{"version": 1, "shmSize": "plenty"}`
+	b.write(file, broken)
+
+	if err := b.fails(1, "up", "web"); !strings.Contains(err, file) || !strings.Contains(err, "is not a size") {
+		t.Errorf("up: %s", err)
+	}
+	if got := b.engine.Lifecycle(); len(got) != 0 {
+		t.Errorf("up touched Docker: %v", got)
+	}
+	if err := b.fails(1, "settings"); !strings.Contains(err, file) {
+		t.Errorf("settings: %s", err)
+	}
+	// Setting does not paper over a file somebody edited.
+	b.fails(1, "settings", "--shm-size", "16g")
+	if data, _ := os.ReadFile(file); string(data) != broken {
+		t.Errorf("settings.json was rewritten:\n%s", data)
+	}
+	b.path["ssh"], b.path["docker"] = true, true
+	code, doctor, _ := b.run("doctor")
+	if code != 1 || !strings.Contains(doctor, " FAIL  this machine's settings cannot be read") {
+		t.Errorf("doctor (exit %d):\n%s", code, doctor)
 	}
 }

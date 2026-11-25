@@ -209,6 +209,39 @@ func TestSpecLabelFollowsTheSettings(t *testing.T) {
 	if spec(Dev(testEnv, testTarget, "holder-1")) != spec(Dev(testEnv, testTarget, "holder-2")) {
 		t.Error("the dev spec must not depend on the holder's container id")
 	}
+
+	shm := testEnv
+	shm.ShmSize = 16 << 30
+	if spec(Dev(shm, testTarget, "h")) == spec(Dev(testEnv, testTarget, "h")) {
+		t.Error("another size of /dev/shm must change the dev spec")
+	}
+	if spec(Holder(shm, testTarget)) != spec(Holder(testEnv, testTarget)) {
+		t.Error("the size of /dev/shm is not part of the holder")
+	}
+}
+
+// /dev/shm is as large as the machine's settings say, in dev only, and it
+// stays dev's own: a larger one is never had by sharing the host's.
+func TestSharedMemoryIsDevsOwnAndAsLargeAsAsked(t *testing.T) {
+	env := testEnv
+	env.ShmSize = 8 << 30
+	dev := Dev(env, testTarget, "holder-id")
+	if dev.Host.ShmSize != 8<<30 {
+		t.Errorf("dev ShmSize = %d", dev.Host.ShmSize)
+	}
+	if dev.Host.IpcMode != "" {
+		t.Errorf("dev IpcMode = %q", dev.Host.IpcMode)
+	}
+	if _, mounted := dev.Host.Tmpfs["/dev/shm"]; mounted {
+		t.Error("/dev/shm is a tmpfs mount of its own")
+	}
+	if holder := Holder(env, testTarget); holder.Host.ShmSize != 0 {
+		t.Errorf("holder ShmSize = %d", holder.Host.ShmSize)
+	}
+	// Without a size, the engine decides.
+	if dev := Dev(testEnv, testTarget, "holder-id"); dev.Host.ShmSize != 0 {
+		t.Errorf("dev ShmSize without a setting = %d", dev.Host.ShmSize)
+	}
 }
 
 // The socket is in dev only when the environment asked for it — and then

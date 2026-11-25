@@ -123,6 +123,7 @@ Go の `os/exec` は 1.19 以降、カレントディレクトリへ解決され
 ```
 <設定ディレクトリ>/
   bulkhead.json                  # {"version": 1, "id": "<12桁>"} — 作り直し版の印と owner ラベルの値
+  settings.json                  # このマシンの全環境に効く設定（変えるまで無い — 下の「マシンの設定」）
   environments/<id>/env.json     # 環境の設定。"version": 1 と "name" を持つ
   id_ed25519, id_ed25519.pub     # マシン鍵（bh が Go で生成。TS 版のものをそのまま使える）
   keys.json                      # 追加の公開鍵（TS 版と同じ形）
@@ -138,6 +139,44 @@ Go の `os/exec` は 1.19 以降、カレントディレクトリへ解決され
   エラー（手編集の打ち間違いを黙って無視しない）。書くときは全項目を書き出す。
 - 読めない env.json は他の環境を止めない（broken として id で一覧に出る。`bh path <id>` と
   `bh destroy <id>` は効く）。名前の重複と local 同士の sshPort の重複は全体のエラー。
+
+### マシンの設定（`settings.json`、決定 2026-11-25）
+
+環境ごとでなく、**このマシンの全環境に効く設定**の置き場。環境の一部ではないので、複製・
+スナップショット・export には入らず、別のマシンは別の値を持つ（メモリの量が違うマシンで
+値を変えるため）。
+
+```json
+{ "version": 1, "shmSize": "8g" }
+```
+
+- **`shmSize`** — dev の `/dev/shm` の大きさ（`HostConfig.ShmSize`）。既定は **8g**、下限は
+  64m（Docker の既定）。書き方は数字と `m` / `g`（`512m`、`16g`）。
+  - きっかけ: 環境の中のエージェントがテストで 64MB に当たった。学習や前処理でも過去に
+    当たっている（ブラウザのテスト、DataLoader のワーカーなど。症状はタブが落ちる・
+    Bus error で、何が足りないのかが分からない）。
+  - **上限であって確保ではない。** `/dev/shm` は tmpfs で、書いた分だけメモリを使う。dev には
+    メモリの上限を付けていないので、広げても境界は変わらない（中のプロセスは元から
+    普通の確保でメモリを使い切れる）。増えるリスクは、`/dev/shm` に残ったファイルが
+    コンテナの再起動までメモリを占め続けることだけ。
+  - 環境ごとの設定にしなかった理由: 足りるかどうかはマシンのメモリで決まり、環境ごとに
+    変えたい場面が思い当たらない。必要になったら env.json に同じ名前の項目を足して、
+    あればそちらを使う形にできる。
+  - holder には付けない（利用者のものは何も動かない）。`--ipc=host` で広げる方法は採らない
+    — doctor が境界の破れとして fail にする設定。
+  - コンテナ仕様の一部なので、**変えると dev の仕様ハッシュが変わる**。既にある dev は
+    作られたときの大きさのままで、doctor が「今の設定と違う」と warn を出し、次の
+    `bh restart`（または変化に気づいた `bh up`）で作り直される。環境の設定と違って
+    「起動中は変えられない」にはしていない — 全環境を止めないと変えられなくなるため。
+  - この項目を足したこと自体でも仕様ハッシュが変わるので、前のビルドで作った dev は
+    次の `bh up` で作り直される（ボリュームには触れない）。
+- 読み方は env.json と同じ: 知らない項目はエラー、`version` が要る。書かれていない項目は
+  既定値。ファイルが無ければすべて既定値で、読んだだけでは作らない。
+- **読めない settings.json は、どの環境も起動させない**（推測の値で dev を作らない）。
+  `bh settings --shm-size` も上書きせずに止まる（手で編集したものを黙って潰さない）。
+  doctor の machine の節が fail にする。
+- 操作: `bh settings`（表示）/ `bh settings --shm-size 16g`。TUI は System → Settings →
+  Shared memory。
 
 ## 4. ライフサイクル（Engine API での手順）
 
@@ -606,6 +645,7 @@ home と nix 以外を渡されると断る）、**ボリュームの中身を�
 | `export` / `import` | 同じ | 形式は版上げ |
 | `compose` | 廃止 | §5 |
 | （なし） | `open <env> --in claude` | 新規（2026-11-16、試し）。下の段落 |
+| （なし） | `settings [--shm-size <size>]` | 新規（2026-11-25）。このマシンの全環境に効く設定 — §3「マシンの設定」 |
 | （なし） | `migrate` | §11。移行が済んだら撤去 |
 | （なし） | `prune`（後回し） | §3 の条件で再導入 |
 
@@ -1078,6 +1118,7 @@ doctor が何も出さない / `bh token set` が新しいシェルに届き `re
 | --- | --- |
 | 上の修正 (手) | `bh open` が新しいウィンドウを開く / TUI の Logs から Ctrl-C で TUI へ戻る / 失敗した ssh の後で Enter を待つ / `HostKeyAlias` つきの項目で VS Code Remote SSH がつながる / メニューの幅 / 下段の並び（メッセージ → 操作説明） |
 | open --in claude (手) | **実機では未確認**（ここにはデスクトップが無い。リンクの形は公式文書の例と突き合わせただけ）。`bh open <env> --in claude` で Claude Desktop（v2.110.0 以降）に確認のダイアログが出て、`bulkhead-<env>` と `/home/developer/workspace` が入っていること / 既に同じ接続を登録しているときは「それを使うか」になること / つながること / TUI に「Open in Claude」が出ること / Claude Desktop が無い Mac で失敗が伝わること。Windows は未確認 |
+| shm-size (手) | **実機では未確認**（偽の Engine で `HostConfig.ShmSize` が渡ることまで）。前のビルドで作った環境に `bh up` → dev が作り直され、中で `df -h /dev/shm` が 8.0G を示すこと / `bh settings --shm-size 16g` の後、doctor が warn を出し、`bh restart <env>` で 16G になること / holder は 64M のまま / Docker Desktop の VM のメモリより大きい値でも起動すること（上限なので通る見込み） / TUI の Settings → Shared memory |
 | 資格情報ストア (手) | ssh 越しなど使えない場所で「ファイルにする」案内が出ること。Windows・Linux は未確認（macOS のキーチェーンは 2026-11-13 に通過 — 上） |
 | 補完 (手) | `eval "$(bh completion zsh)"` で、`bh token set <env> ` の後にサービス、その後にプリセットが説明つきで弱い順に出る / `bh var unset <env> ` で変数名 / `bh rollback <env> ` でスナップショット。ここでは本物の zsh を擬似端末で動かして確かめた。PowerShell は Linux の pwsh 7.6.5 で `TabExpansion2` を呼んで確かめた（コマンド・サブコマンド・環境・サービス・プリセットの説明・フラグとその値・引用符つきの語）— **Windows と Windows PowerShell 5.1 では未確認**。bash は対話の bash 5.2.37（Linux）を擬似端末で動かして確かめた（コマンド・サブコマンド・環境・サービス・プリセットが弱い順・変数名・フラグとその値・ファイル名（空白入り、ディレクトリの中）・行の途中・候補が無い位置では何も出ない）— **macOS の bash 3.2**: 2026-11-18、CI の macOS で初めてスクリプトが 3.2 に当たり、**不具合が見つかった** — IFS に空白が無いと、3.2 は配列の一部（`"${COMP_WORDS[@]:1:COMP_CWORD}"`）を1語につなげてしまい、bh に語がまとめて1つで渡っていた。IFS を変える前に語を取り出すように直し、同じテスト（`TestBashScriptCarriesTheLineAndTheAnswer`）が macOS で通る。対話での見え方（`compopt` が無いので順序はアルファベット順、ファイル名の空白のエスケープとディレクトリ末尾の `/` は付かない見込み）は未確認 |
 | token (手) | **GitHub は 2026-11-14 に通過**（ユーザー、Mac — 本物のトークンを割り当て、`bh token refresh`、環境の中の `gh auth status`）。残り: `bh token remove` の失効、Hugging Face の種類の読み取りと失効（**Hugging Face の API は文書を読んだだけで、一度も呼んでいない**）、`gh run view --log` が `push` で通ること、期限が近いときの表示。前のビルドで設定したトークン（`github.json`）が読み替えられること |

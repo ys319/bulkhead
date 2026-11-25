@@ -157,6 +157,10 @@ const usageText = `usage: bh [command] [arguments]
   root-shell <env>    a root shell in the running environment (full
                       privileges, for troubleshooting)
   gpu list            the CDI devices the Docker engine offers
+  settings [--shm-size <size>]
+                      what holds for all environments of this machine: how
+                      much /dev/shm holds (8g unless set). Without a flag,
+                      prints the settings (bh settings --help for details)
   var list | set | unset
                       environment variables of an environment that are no
                       secret (bh var for details)
@@ -225,6 +229,7 @@ func (a *app) run(ctx context.Context, args []string) int {
 		"init":       a.initRun,
 		"root-shell": a.rootShell,
 		"gpu":        a.gpu,
+		"settings":   a.settings,
 		"path":       a.path,
 		"reset":      a.reset,
 		"snapshot":   a.snapshot,

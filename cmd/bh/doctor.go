@@ -174,6 +174,8 @@ func (a *app) machineFacts(store config.Store, cfg *config.Config, info *engine.
 	}
 	// What is in force: the variable, for a run that sets it.
 	facts.SecretStore, _ = a.secretStoreKind(store, false)
+	settings, err := store.LoadSettings()
+	facts.ShmSize, facts.SettingsErr = config.FormatSize(settings.ShmSize), err
 
 	path, err := a.sshConfigPath()
 	if err != nil {
@@ -225,7 +227,11 @@ func environmentFacts(store config.Store, env config.Environment, registry []con
 	} else {
 		keys = append(keys, registered...)
 	}
-	facts.Plan = planEnv(env, keys, store.InitScript())
+	settings, err := store.LoadSettings()
+	if err != nil {
+		unknown("this machine's settings cannot be read")
+	}
+	facts.Plan = planEnv(env, settings, keys, store.InitScript())
 	// Docker Desktop reports the bind by the file's real path.
 	if followed, err := filepath.EvalSymlinks(store.InitScript()); err == nil && followed != store.InitScript() {
 		facts.Resolved = map[string]string{store.InitScript(): followed}

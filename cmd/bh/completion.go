@@ -298,6 +298,9 @@ func init() {
 	}
 }
 
+// Sizes to start from; any other is typed.
+var shmSizes = oneOf("4g", "8g", "16g", "32g")
+
 var completedCommands = []commandSpec{
 	{name: "create", about: "define a new environment", args: []argument{nil},
 		flags: []flagSpec{valued("--from", localEnvs), valued("--port", nil), plain("--publish"), valued("--restart", restarts)}},
@@ -333,6 +336,8 @@ var completedCommands = []commandSpec{
 	{name: "init", about: "run init.sh in the running environment", args: []argument{awakeEnvs}},
 	{name: "root-shell", about: "root shell in the running dev container", args: []argument{awakeEnvs}},
 	{name: "gpu", about: "the GPU devices of the engine", subs: []commandSpec{{name: "list", about: "list the CDI devices"}}},
+	{name: "settings", about: "what holds for all environments of this machine",
+		flags: []flagSpec{valued("--shm-size", shmSizes)}},
 	{name: "var", about: "environment variables that are no secret", subs: []commandSpec{
 		{name: "list", about: "the variables of an environment", args: []argument{localEnvs}},
 		{name: "set", about: "set a variable", args: []argument{localEnvs, variableNames, nil}},

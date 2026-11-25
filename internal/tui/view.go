@@ -211,7 +211,7 @@ func (m *Model) detail(inner, rows int) []string {
 	case rowRegisterKey:
 		return wrap("Register a public key of another machine, so that it can be allowed into environments here.", inner)
 	case rowSettings:
-		return wrap("Settings shared by all environments: init.sh, the script that runs once in every new environment.", inner)
+		return wrap("Settings shared by all environments: how much /dev/shm holds, and init.sh, the script that runs once in every new environment.", inner)
 	case rowMachineKey:
 		return wrap("Show this machine's public key (and copy it), to register it on another machine with bh key add.", inner)
 	}

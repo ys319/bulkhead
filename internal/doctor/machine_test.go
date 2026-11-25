@@ -16,6 +16,7 @@ func ready() Machine {
 		MachineKey:   File{Path: "/cfg/id_ed25519", Mode: 0o600},
 		InitScript:   File{Path: "/cfg/init.sh", Mode: 0o755},
 		Keys:         2,
+		ShmSize:      "8g",
 		Environments: 1,
 		SSHConfig:    "/home/me/.ssh/config",
 		Included:     true, EntriesCurrent: true,
@@ -29,7 +30,8 @@ func TestAReadyMachinePasses(t *testing.T) {
 			t.Errorf("%s: %s", f.Level, f.Message)
 		}
 	}
-	for _, part := range []string{"Docker Engine 29.0.0 (API 1.52, linux/arm64)", "key registry: 2 key(s)"} {
+	for _, part := range []string{"Docker Engine 29.0.0 (API 1.52, linux/arm64)", "key registry: 2 key(s)",
+		"an environment's /dev/shm holds up to 8g (bh settings)"} {
 		if !has(findings, OK, part) {
 			t.Errorf("no ok finding with %q:\n%s", part, listing(findings))
 		}
@@ -64,6 +66,9 @@ func TestMachineChecks(t *testing.T) {
 			m.KeysErr = errors.New("/cfg/keys.json: unexpected end of JSON input")
 		}, Fail, "the key registry cannot be read — /cfg/keys.json"},
 		{"an empty registry", func(m *Machine) { m.Keys = 0 }, OK, "key registry: no keys besides the machine key"},
+
+		{"settings that cannot be read", func(m *Machine) { m.SettingsErr = errors.New("/cfg/settings.json: no version") }, Fail,
+			"this machine's settings cannot be read, and no environment starts without them — /cfg/settings.json: no version"},
 
 		{"no init.sh yet", func(m *Machine) { m.InitScript = missing }, Warn, "no init.sh yet"},
 		// What the engine of the TypeScript version made of a missing file.

@@ -41,6 +41,10 @@ type Machine struct {
 	// SecretStore is where the values of secrets and tokens are kept:
 	// "keychain", "file", or "" while nothing was ever set.
 	SecretStore string
+	// ShmSize is the size of /dev/shm the settings give an environment, as
+	// it is written (8g); SettingsErr is why the settings cannot be read.
+	ShmSize     string
+	SettingsErr error
 
 	// Environments is how many there are, the broken ones included.
 	Environments int
@@ -60,7 +64,7 @@ type Machine struct {
 func CheckMachine(m Machine) []Finding {
 	var out []Finding
 	out = append(out, checkEngine(m), checkDockerCLI(m), checkSSHClient(m), checkVSCode(m))
-	out = append(out, checkMachineKey(m), checkKeyRegistry(m), checkSecretStore(m), checkInitScript(m))
+	out = append(out, checkMachineKey(m), checkKeyRegistry(m), checkSecretStore(m), checkSettings(m), checkInitScript(m))
 	return append(out, checkSSHConfig(m)...)
 }
 
@@ -136,6 +140,15 @@ func checkSecretStore(m Machine) Finding {
 		return ok("secrets and tokens are kept in files readable only by you (bh secret store keychain moves them to the credential store)")
 	}
 	return ok("no secret or token was set yet — the first goes to the credential store, if this machine has one")
+}
+
+// The settings of the machine are part of what every dev container is
+// created from: unreadable, no environment starts.
+func checkSettings(m Machine) Finding {
+	if m.SettingsErr != nil {
+		return fail("this machine's settings cannot be read, and no environment starts without them — " + m.SettingsErr.Error())
+	}
+	return ok(fmt.Sprintf("an environment's /dev/shm holds up to %s (bh settings)", m.ShmSize))
 }
 
 // init.sh is bound into every dev container. A missing file makes the

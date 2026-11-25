@@ -7,17 +7,17 @@ TS 版は隣の `../bulkhead-ts/`（退避済み。仕様・ADR・脅威モデ�
   **実機で未確認のもの**（§13）。
 - いまあるもの: 引数なしの TUI と、`create` / `configure` / `rename` / `up` / `down` /
   `restart` / `list` / `status` / `ssh` / `open` / `logs` / `init` / `root-shell` / `key` /
-  `remote` / `gpu` / `var` / `secret` / `token` / `doctor` / `completion` / `path` / `snapshot` /
-  `rollback` / `export` / `import` / `archive` / `unarchive` / `reset` / `destroy` / `migrate` /
-  `version`。まだ無いもの（`prune`、`--json`）は仕様案 §13。
+  `remote` / `gpu` / `settings` / `var` / `secret` / `token` / `doctor` / `completion` / `path` /
+  `snapshot` / `rollback` / `export` / `import` / `archive` / `unarchive` / `reset` / `destroy` /
+  `migrate` / `version`。まだ無いもの（`prune`、`--json`）は仕様案 §13。
 - 配布: `.github/workflows/`（`ci.yaml` は3つの OS でテスト、`release.yaml` はタグ `vX.Y.Z` で
   下書きのリリース）。バイナリを作るのは `scripts/build-release.sh` の1か所。アクションは
   `actions/*` だけを SHA で固定する。署名を入れるときの形は仕様案 §10。
 - 構成:
   - `cmd/bh` — 引数の解釈と表示。各機能は「データを返すコア関数」と「表示する薄い CLI 関数」に
     分ける（TUI は `cmd/bh/tui.go` の backend からコア関数を呼ぶ）。
-  - `internal/config` — 設定ディレクトリの読み書き（env.json・鍵レジストリ・トークンの記録・
-    TS 版の読み取り）。
+  - `internal/config` — 設定ディレクトリの読み書き（env.json・マシンの設定 settings.json・
+    鍵レジストリ・トークンの記録・TS 版の読み取り）。
   - `internal/plan` — 設定 → コンテナ仕様の純関数。**境界の不変条件はここのテストが固定する。**
   - `internal/ops` — 起動ゲートつきの手順（up / down / restart / reset / destroy / 移行）と
     状態の要約。

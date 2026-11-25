@@ -63,6 +63,11 @@ func (b backend) Load(ctx context.Context) (tui.Snapshot, error) {
 		return tui.Snapshot{}, keysErr
 	}
 	snap := tui.Snapshot{Broken: cfg.Broken, Keys: keys}
+	if settings, err := store.LoadSettings(); err != nil {
+		snap.SettingsProblem = err.Error()
+	} else {
+		snap.ShmSize = config.FormatSize(settings.ShmSize)
+	}
 
 	// One connection for all environments, and none when there is no
 	// local one. When the engine cannot be asked the list still shows what
@@ -149,6 +154,11 @@ func (b backend) Destroy(ctx context.Context, name string) error {
 
 func (b backend) Configure(ctx context.Context, name string, changes config.Changes) error {
 	_, err := b.quiet(io.Discard).applyChanges(ctx, name, changes)
+	return err
+}
+
+func (b backend) SetShmSize(size string) error {
+	_, err := b.quiet(io.Discard).setShmSize(size)
 	return err
 }
 

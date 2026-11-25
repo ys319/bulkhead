@@ -144,6 +144,13 @@ type Env struct {
 	GPU        string
 	CDIDevices []string
 	DeviceGIDs []int
+
+	// ShmSize is the size of dev's /dev/shm in bytes: a setting of the
+	// machine, the same for all its environments. 0 leaves it to the
+	// engine (64 MB). It is a ceiling on memory dev could use anyway — no
+	// part of the boundary — and the holder, which runs nothing of the
+	// user's, keeps the engine's.
+	ShmSize int64
 }
 
 // DockerSocketPath is where the engine's socket is, on the engine's side
@@ -281,6 +288,7 @@ func Dev(env Env, target Target, holderID string) Container {
 			SecurityOpt:   []string{"no-new-privileges:true"},
 			Mounts:        mounts,
 			RestartPolicy: restartPolicy(env),
+			ShmSize:       env.ShmSize,
 		},
 	}
 	if env.DockerSocket {

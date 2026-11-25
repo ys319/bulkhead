@@ -47,19 +47,46 @@ func (m *Model) choose(r row) tea.Cmd {
 	case rowRegisterKey:
 		m.push(m.askKey())
 	case rowSettings:
-		m.push(&menu{name: "Settings", build: func(*Model) []item {
-			return []item{{label: "Edit init.sh", run: func(m *Model) tea.Cmd {
-				path, err := m.backend.InitScript()
-				if err != nil {
-					return m.fail(err)
-				}
-				return m.edit("the editor", path, nil)
-			}}}
-		}})
+		m.push(m.machineMenu())
 	case rowMachineKey:
 		return m.showMachineKey()
 	}
 	return nil
+}
+
+// machineMenu: what holds for all environments of this machine.
+func (m *Model) machineMenu() *menu {
+	return &menu{name: "Settings", build: func(m *Model) []item {
+		shm := item{label: "Shared memory", value: m.snap.ShmSize, disabled: m.snap.SettingsProblem, run: func(m *Model) tea.Cmd {
+			m.push(&input{name: "Shared memory", value: []rune(m.snap.ShmSize),
+				prompt: []string{
+					"How much /dev/shm holds in an environment — a number with m or g (512m, 16g):",
+					"It is a ceiling: memory is used only for what is written there. An environment has the new size after its next Reboot.",
+				},
+				submit: func(m *Model, value string) (tea.Cmd, error) {
+					size, err := config.ParseShmSize(value)
+					if err != nil {
+						return nil, err
+					}
+					m.pop()
+					text := fmt.Sprintf("/dev/shm holds up to %s — an environment has it after its next Reboot", config.FormatSize(size))
+					return m.do("Saving", text, true, func(io.Writer) error {
+						return m.backend.SetShmSize(config.FormatSize(size))
+					}), nil
+				}})
+			return nil
+		}}
+		if m.snap.SettingsProblem != "" {
+			shm.value = "unreadable"
+		}
+		return []item{shm, {label: "Edit init.sh", run: func(m *Model) tea.Cmd {
+			path, err := m.backend.InitScript()
+			if err != nil {
+				return m.fail(err)
+			}
+			return m.edit("the editor", path, nil)
+		}}}
+	}}
 }
 
 // fail closes the dialogs and shows the error.

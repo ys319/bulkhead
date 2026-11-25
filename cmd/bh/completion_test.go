@@ -221,6 +221,8 @@ func TestCompletionOffersWhatGoesAtEachPosition(t *testing.T) {
 		{[]string{"rollback", "--only", "home", "web", ""}, []string{"latest", "2026-11-13T090100Z", "2026-11-13T090000Z"}},
 		{[]string{"configure", "web", "--gpu", ""}, []string{"off", "legacy", "cdi"}},
 		{[]string{"configure", "web", "--publish", ""}, []string{"on", "off"}},
+		{[]string{"settings", "--"}, []string{"--shm-size"}},
+		{[]string{"settings", "--shm-size", ""}, []string{"4g", "8g", "16g", "32g"}},
 		{[]string{"create", "new", "--restart", "u"}, []string{"unless-stopped"}},
 		{[]string{"reset", "web", "--"}, []string{"--home", "--no-snapshot", "--yes"}},
 

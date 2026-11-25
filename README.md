@@ -93,6 +93,11 @@ SSH の接続先 `bulkhead-web`・フォルダ `/home/developer/workspace` を�
 鍵・ポート・ユーザーはリンクに載せず、bh が `~/.ssh` に書いている `Host bulkhead-web` から
 来る — VS Code と同じ経路。
 
+環境の中の `/dev/shm`（共有メモリ）は 8GB まで使える（Docker の既定は 64MB で、ブラウザの
+テストやデータの前処理には足りない）。上限であって確保ではないので、使った分しかメモリは
+減らない。マシンのメモリに合わせて変えるときは `bh settings --shm-size 16g`（`4g`、`512m`
+など）— そのマシンの全環境に効き、環境は次の `bh restart` から新しい大きさになる。
+
 設定は `~/.config/bh`（Windows は `%APPDATA%\bh`。`BH_CONFIG_DIR` で変えられる）に置かれる。
 環境のデータは Docker のボリュームにあり、**消すのは `bh destroy` / `bh reset` / `bh archive`
 （ボリュームごと）と `bh rollback`（中身の入れ替え）だけ**。どれも確認を求める。

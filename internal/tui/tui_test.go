@@ -146,6 +146,13 @@ func (f *fake) Configure(_ context.Context, name string, changes config.Changes)
 	state.Env = state.Env.With(changes)
 	return nil
 }
+func (f *fake) SetShmSize(size string) error {
+	if err := f.call("shm-size %s", size); err != nil {
+		return err
+	}
+	f.snap.ShmSize = size
+	return nil
+}
 func (f *fake) RunInit(_ context.Context, name string, _ io.Writer) error {
 	return f.call("init %s", name)
 }
@@ -787,6 +794,44 @@ func TestAddRemote(t *testing.T) {
 	s.called("add-remote main studio.test:22005")
 	if s.selected().label != "main" {
 		t.Errorf("cursor on %q", s.selected().label)
+	}
+}
+
+func TestSharedMemoryIsSetForAllEnvironments(t *testing.T) {
+	s := start(t)
+	s.backend.snap.ShmSize = "8g"
+	s.press("r")
+	s.onto("Settings").press("enter")
+	if got, want := s.labels(), []string{"Shared memory", "Edit init.sh"}; !slices.Equal(got, want) {
+		t.Fatalf("settings: %v", got)
+	}
+	s.shows("8g")
+	s.pick("Shared memory")
+	// What is there now is what is edited.
+	if got := string(s.top().(*input).value); got != "8g" {
+		t.Errorf("the input starts with %q", got)
+	}
+	s.top().(*input).value = []rune("lots")
+	s.press("enter")
+	s.shows("is not a size")
+	s.top().(*input).value = []rune("32m")
+	s.press("enter")
+	s.shows("at least 64m")
+	s.top().(*input).value = []rune("16G")
+	s.press("enter")
+	s.called("shm-size 16g")
+	s.shows("16g")
+
+	// Settings that cannot be read are not edited from here.
+	s.backend.snap.ShmSize, s.backend.snap.SettingsProblem = "", "/cfg/settings.json: no version"
+	s.press("esc", "r")
+	s.backend.calls = nil
+	s.onto("Settings").press("enter")
+	s.shows("unreadable")
+	s.pick("Shared memory")
+	s.shows("/cfg/settings.json: no version")
+	if len(s.backend.calls) != 0 {
+		t.Errorf("calls: %v", s.backend.calls)
 	}
 }
 

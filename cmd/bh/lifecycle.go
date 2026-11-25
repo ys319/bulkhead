@@ -246,14 +246,18 @@ func containersFor(store config.Store, env config.Environment) (plan.Env, plan.T
 	if err != nil {
 		return plan.Env{}, plan.Target{}, fmt.Errorf("preparing init.sh: %w", err)
 	}
+	settings, err := store.LoadSettings()
+	if err != nil {
+		return plan.Env{}, plan.Target{}, err
+	}
 
-	return planEnv(env, append([]string{machineKey}, registered...), initScript), plan.Target{Owner: owner}, nil
+	return planEnv(env, settings, append([]string{machineKey}, registered...), initScript), plan.Target{Owner: owner}, nil
 }
 
 // planEnv is the settings as the plan takes them. It is one function so
 // that bh doctor compares the containers with exactly what bh up creates
 // them from.
-func planEnv(env config.Environment, keys []string, initScript string) plan.Env {
+func planEnv(env config.Environment, settings config.Settings, keys []string, initScript string) plan.Env {
 	return plan.Env{
 		ID: env.ID, Name: env.Name, SSHPort: env.SSHPort, Publish: env.Publish, Restart: env.Restart,
 		AuthorizedKeys: keys,
@@ -261,6 +265,7 @@ func planEnv(env config.Environment, keys []string, initScript string) plan.Env 
 		InitScript:     initScript,
 		GPU:            env.GPU,
 		CDIDevices:     env.CDIDevices,
+		ShmSize:        settings.ShmSize,
 	}
 }
 

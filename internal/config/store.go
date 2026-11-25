@@ -2,6 +2,7 @@
 // environments exist and what their settings are.
 //
 //	<dir>/bulkhead.json                 marks the directory and holds its id
+//	<dir>/settings.json                 what holds for all environments (once set)
 //	<dir>/environments/<id>/env.json    one environment's settings
 //	<dir>/id_ed25519[.pub]              the machine's ssh key
 //	<dir>/keys.json                     registered public keys

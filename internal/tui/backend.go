@@ -71,6 +71,11 @@ type Snapshot struct {
 	Envs   []EnvState
 	Broken []config.Broken
 	Keys   []config.KeyEntry
+	// ShmSize is how much /dev/shm holds in an environment, as it is
+	// written (8g): a setting of the machine. SettingsProblem says why the
+	// settings could not be read.
+	ShmSize         string
+	SettingsProblem string
 	// EngineProblem says why the engine could not be asked, if it could not.
 	EngineProblem string
 }
@@ -99,6 +104,10 @@ type Backend interface {
 	Reset(ctx context.Context, name string, home bool, progress io.Writer) (string, error)
 	Destroy(ctx context.Context, name string) error
 	Configure(ctx context.Context, name string, changes config.Changes) error
+	// SetShmSize changes how much /dev/shm holds in every environment
+	// (512m, 16g). An environment has it once its dev container is created
+	// again.
+	SetShmSize(size string) error
 	RunInit(ctx context.Context, name string, progress io.Writer) error
 	Open(ctx context.Context, name string) error // in VS Code
 	// OpenInClaude hands the environment to the Claude desktop app, which

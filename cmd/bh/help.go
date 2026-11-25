@@ -22,6 +22,7 @@ var ownUsage = map[string]string{
 	"configure": configureUsage,
 	"key":       keyUsage,
 	"remote":    remoteUsage,
+	"settings":  settingsUsage,
 	"var":       varUsage,
 	"secret":    secretUsage,
 	"token":     tokenUsage,
